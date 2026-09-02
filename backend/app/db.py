@@ -31,8 +31,9 @@ def ensure_data_dir(url: str) -> None:
 
 
 def make_engine(database_url: str | None = None) -> Engine:
-    """SQLite: включаем WAL и разрешаем соединения из разных потоков (FastAPI threadpool)."""
+    """Engine из settings.DATABASE_URL; sqlite-пути якорит к корню репозитория."""
     url = _repo_relative_sqlite_url(database_url or settings.database_url)
+    ensure_data_dir(url)
     return create_engine(
         url,
         connect_args={"check_same_thread": False}
