@@ -65,10 +65,36 @@ def test_long_text_splits_by_sentences_and_joins(fake_model):
     assert len(text) > 300
     data = tts.synthesize(text, voice="baya")
     assert len(fake_model.calls) == 4  # резка по [.!?…]\s — четыре предложения
+    assert max(len(call["text"]) for call in fake_model.calls) <= tts.MAX_CHUNK_CHARS
     audio, rate = _read_wav(data)
     assert rate == 24000
     # один файл, длительность ≈ сумме частей (сэмплы конкатенируются)
     total_samples = sum(2400 * (i + 1) for i in range(len(fake_model.calls)))
+    assert len(audio) == total_samples
+
+
+def test_oversized_sentence_splits_within_limit(fake_model):
+    sentence = " ".join(["слово"] * 150) + "."  # одно предложение без точки внутри, 900 символов
+    assert len(sentence) >= 600
+    data = tts.synthesize(sentence, voice="kseniya")
+    texts = [call["text"] for call in fake_model.calls]
+    assert len(texts) >= 2  # сверхдлинное предложение синтезируется частями
+    assert max(len(t) for t in texts) <= tts.MAX_CHUNK_CHARS
+    assert " ".join(texts) == sentence  # резка по словам не теряет содержимое
+    audio, _ = _read_wav(data)
+    total_samples = sum(2400 * (i + 1) for i in range(len(texts)))
+    assert len(audio) == total_samples
+
+
+def test_single_huge_word_hard_split(fake_model):
+    word = "а" * 700  # одиночное слово длиннее границы — жёсткая резка по 300
+    data = tts.synthesize(word, voice="kseniya")
+    texts = [call["text"] for call in fake_model.calls]
+    assert len(texts) == 3  # 300 + 300 + 100
+    assert max(len(t) for t in texts) <= tts.MAX_CHUNK_CHARS
+    assert "".join(texts) == word  # жёсткая резка сохраняет всё слово
+    audio, _ = _read_wav(data)
+    total_samples = sum(2400 * (i + 1) for i in range(len(texts)))
     assert len(audio) == total_samples
 
 

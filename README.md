@@ -36,7 +36,7 @@ make mlflow-ui   # MLflow UI: http://localhost:5100
 ### TTS: Silero (T135)
 
 - `POST /api/tts` `{"text": "...", "voice": "kseniya"}` → `audio/wav` (24 кГц, mono). Голоса: `aidar/baya/kseniya/xenia/eugene/random`; смена голоса — без рестарта (модель — singleton).
-- Текст длиннее 300 символов режется по предложениям и склеивается в один непрерывный wav.
+- Текст длиннее 300 символов режется по предложениям (сверхдлинные предложения — ещё и по словам, каждая часть ≤300 символов) и склеивается в один непрерывный wav.
 - Модель строго CPU (VRAM не занимает). Артефакт `v4_ru.pt` (~40 МБ, models.silero.ai) кладётся в `~/.cache/torch/hub/silero/`; скачивание входит в `make models` (консолидация T141). Отдельный прогрев при необходимости: `cd backend && uv run python -m app.download_silero`.
 - Порядок загрузки в `app/tts.py`: артефакт `v4_ru.pt` → `torch.hub.load('snakers4/silero-models', ...)` → `source='local'`. Фолбэк W200: torch.hub-путь требует `omegaconf` (в зависимостях проекта нет) и доступности репозитория `snakers4/silero-models` на Hugging Face (сейчас отдаёт 404) — поэтому основной путь в этом окружении артефактный.
 
