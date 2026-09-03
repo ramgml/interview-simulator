@@ -1,4 +1,4 @@
-"""Роутер сессий: /api/sessions — create/start/answer/finish, GET-ы (ARCHITECTURE §API)."""
+"""Роутер сессий: /api/sessions — create/start/answer/finish, /api/progress (ARCHITECTURE §API)."""
 
 import asyncio
 import json
@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from sqlalchemy import select
 from sqlalchemy.orm import Session as DbSession
-from app import interviewer, llm, stt, tracing
+from app import evaluator, interviewer, llm, stt, tracing
 from app.db import get_db
 from app.errors import EmptyTranscript, InterviewError
 from app.interviewer import MAX_TURNS
@@ -128,6 +128,7 @@ async def answer_session(
 
     if done:
         _complete(db, session)
+        _finalize_session(db, session)
     return AnswerOut(
         transcript=transcript,
         question_text=decision.get("text") if not done else None,
@@ -138,11 +139,12 @@ async def answer_session(
 
 @router.post("/api/sessions/{session_id}/finish")
 def finish_session(session_id: str, db: DbSession = Depends(get_db)) -> dict:
-    """Досрочный finish: status=completed + duration_sec (без отчёта)."""
+    """Досрочный finish: оценка (degraded при ошибке LLM) + completed + duration_sec."""
     session = _get_session(db, session_id)
     if session.status not in ("in_progress", "created"):
         raise _http_error(409, f"Сессия не идёт (status={session.status})")
     _complete(db, session)
+    _finalize_session(db, session)
     return _session_state(db, session)
 
 
@@ -167,6 +169,49 @@ def get_report(session_id: str, db: DbSession = Depends(get_db)) -> dict:
     if not session.report_json:
         raise _http_error(404, "Отчёт ещё не готов")
     return json.loads(session.report_json)
+
+
+@router.get("/api/progress")
+def get_progress(db: DbSession = Depends(get_db)) -> dict:
+    """Агрегация по completed-сессиям: баллы, средние компетенций, тренд (ARCHITECTURE §API).
+
+    Выборка completed-сессий — SQL; средние по компетенциям и тренд — python-агрегация
+    report_json (JSON1 SQL проигрывает в читаемости, объёмы MVP — десятки сессий).
+    """
+    rows = db.execute(
+        select(Session)
+        .where(Session.status == "completed")
+        .order_by(Session.created_at.asc())
+    ).scalars().all()
+    sessions = [
+        {
+            "date": row.created_at,
+            "position_title": row.position_title,
+            "overall_score": row.overall_score,
+        }
+        for row in rows
+    ]
+    scores: dict[str, list[float]] = {}
+    for row in rows:
+        if not row.report_json:
+            continue
+        try:
+            report = json.loads(row.report_json)
+        except ValueError:
+            logger.warning("report_json is not valid JSON for session %s", row.id)
+            continue
+        for comp in report.get("competencies", []):
+            name = comp.get("name")
+            score = comp.get("score")
+            if name and score is not None:
+                scores.setdefault(name, []).append(float(score))
+    averages = {name: sum(vals) / len(vals) for name, vals in scores.items()}
+    trend = None
+    if len(sessions) >= 2 and sessions[-2]["overall_score"] is not None:
+        prev, last = sessions[-2]["overall_score"], sessions[-1]["overall_score"]
+        if last is not None:
+            trend = "up" if last > prev else ("down" if last < prev else None)
+    return {"sessions": sessions, "averages": averages, "trend": trend}
 
 
 # --- helpers --------------------------------------------------------------------
@@ -236,6 +281,37 @@ def _complete(db: DbSession, session: Session) -> None:
             started = started.replace(tzinfo=timezone.utc)
         session.duration_sec = (completed - started).total_seconds()
     db.commit()
+
+
+def _finalize_session(db: DbSession, session: Session) -> None:
+    """Оценка + финал: report_json/overall_score до log_session_run (ARCHITECTURE §Оценщик/§MLflow).
+
+    Ошибка evaluate не роняет сессию — degraded-отчёт; ошибка MLflow гасится внутри
+    log_session_run (None). Попытка evaluate без client не нужна: _complete гарантирует
+    completed; здесь — общий путь завершения для answer(done) и /finish.
+    """
+    try:
+        client = llm.get_client(_settings(db))
+        report = evaluator.evaluate(client, session)
+    except Exception:
+        logger.exception("evaluate failed unexpectedly for session %s — degraded", session.id)
+        report = evaluator.degraded_report()
+    session.report_json = json.dumps(report, ensure_ascii=False)
+    if report.get("overall_score") is not None:
+        session.overall_score = float(report["overall_score"])
+    db.commit()
+    try:
+        session.mlflow_run_id = tracing.log_session_run(session, _turns_of(db, session), report)
+        db.commit()
+    except Exception:
+        # log_session_run гасит свои ошибки (None); сюда попадает только его собственный сбой.
+        logger.exception("log_session_run failed unexpectedly for session %s", session.id)
+    logger.info(
+        "session %s finalized: status=completed, degraded=%s, mlflow_run_id=%s",
+        session.id,
+        bool(report.get("degraded")),
+        session.mlflow_run_id,
+    )
 
 
 def _fail(db: DbSession, session: Session, exc: Exception) -> None:

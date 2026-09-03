@@ -1,7 +1,7 @@
 """FastAPI-приложение: CORS :3000, lifespan (create_all + сид), GET /health.
 
 Роутеры: audio (/api/stt) — T134, /api/tts — T135, settings (/api/settings GET/PUT/test) — T133,
-sessions (/api/sessions) — T131.
+sessions (/api/sessions, /api/progress) — T131/T132.
 """
 
 import logging
