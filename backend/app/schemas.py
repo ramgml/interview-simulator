@@ -30,3 +30,12 @@ class SessionOut(BaseModel):
 
 class SessionCreated(BaseModel):
     id: str
+
+
+# Озвучка: {text, voice?} → audio/wav (ARCHITECTURE §API, §Голос)
+TtsVoice = Literal["aidar", "baya", "kseniya", "xenia", "eugene", "random"]
+
+
+class TtsRequest(BaseModel):
+    text: str = Field(min_length=1)
+    voice: TtsVoice = "kseniya"

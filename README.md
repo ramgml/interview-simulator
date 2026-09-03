@@ -33,6 +33,13 @@ make mlflow-ui   # MLflow UI: http://localhost:5100
 
 Голосовой цикл работает полностью локально: faster-whisper (STT) и Silero (TTS). Целевая машина — RTX 3070 Ti 8 ГБ (whisper: CUDA `int8_float16`). Микрофон не обязателен: если его нет, вопросы приходят текстом, а отвечать можно текстом — текстовый fallback является частью продукта, а не обходным путём.
 
+### TTS: Silero (T135)
+
+- `POST /api/tts` `{"text": "...", "voice": "kseniya"}` → `audio/wav` (24 кГц, mono). Голоса: `aidar/baya/kseniya/xenia/eugene/random`; смена голоса — без рестарта (модель — singleton).
+- Текст длиннее 300 символов режется по предложениям и склеивается в один непрерывный wav.
+- Модель строго CPU (VRAM не занимает). Прогрев: `cd backend && uv run python -m app.download_silero` — скачивает артефакт `v4_ru.pt` (~40 МБ, models.silero.ai) в `~/.cache/torch/hub/silero/`. После консолидации `make models` (whisper+silero, отдельный PR `chore(T126)`) прогрев накрывается общей целью.
+- Порядок загрузки в `app/tts.py`: артефакт `v4_ru.pt` → `torch.hub.load('snakers4/silero-models', ...)` → `source='local'`. Фолбэк W200: torch.hub-путь требует `omegaconf` (в зависимостях проекта нет) и доступности репозитория `snakers4/silero-models` на Hugging Face (сейчас отдаёт 404) — поэтому основной путь в этом окружении артефактный.
+
 ## Состояние репозитория (каркас, T128)
 
 Директорий `backend/` и `frontend/` ещё нет — они появятся в следующих задачах (T129+). Поэтому make-цели `setup`, `models`, `backend`, `frontend`, `dev`, `test`, `lint` сейчас завершаются ошибкой с пояснением (ненулевой код выхода — ожидаемое поведение).
