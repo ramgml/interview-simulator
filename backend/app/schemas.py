@@ -32,6 +32,32 @@ class SessionCreated(BaseModel):
     id: str
 
 
+
+# Настройки: singleton id=1; api_key наружу маскируется '***' (ARCHITECTURE §API, §Модель данных)
+SettingsProvider = Literal["local", "cloud"]
+
+
+class SettingsRead(BaseModel):
+    provider: str
+    base_url: str
+    api_key: str | None
+    model: str
+    whisper_model: str
+    tts_voice: str
+    updated_at: datetime
+
+
+class SettingsUpdate(BaseModel):
+    """Все поля опциональны: api_key='***' или пустой → хранимый не перетирается (роутер)."""
+
+    provider: SettingsProvider | None = None
+    base_url: str | None = None
+    api_key: str | None = None
+    model: str | None = None
+    whisper_model: str | None = None
+    tts_voice: str | None = None
+
+
 # Озвучка: {text, voice?} → audio/wav (ARCHITECTURE §API, §Голос)
 TtsVoice = Literal["aidar", "baya", "kseniya", "xenia", "eugene", "random"]
 
