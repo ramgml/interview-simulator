@@ -13,17 +13,19 @@ export function splitSentences(text: string): string[] {
 
 /**
  * Озвучка текста вопроса: последовательные POST /api/tts по предложениям,
- * очередь <audio> по цепочке ended → next. isSpeaking=true на всё время очереди,
- * чтобы Recorder был заблокирован во время озвучки; onDone — по завершении.
+ * очередь <audio> по цепочке ended → next. onSpeakingStart/onDone отмечают границы
+ * очереди, чтобы Recorder был заблокирован (isSpeaking) на всё время озвучки.
  * Текст вопроса рендерится сразу, не дожидаясь озвучки.
  */
 export default function AudioQueue({
   text,
   voice,
+  onSpeakingStart,
   onDone,
 }: {
   text: string;
   voice?: string;
+  onSpeakingStart?: () => void;
   onDone?: () => void;
 }) {
   const [speaking, setSpeaking] = useState(false);
@@ -34,6 +36,7 @@ export default function AudioQueue({
     if (!text) return;
     let cancelled = false;
     setSpeaking(true);
+    onSpeakingStart?.();
 
     async function playQueue() {
       const chunks = splitSentences(text);
@@ -52,7 +55,7 @@ export default function AudioQueue({
             void audio.play().catch(() => resolve());
           });
         } catch {
-          // Синтез одной фразы упал (бэкенд недоступен) — озвучиваем остальные,
+          // Синтез одной фразы упал (бэкенд недоступен) — переходим к остальным,
           // текст и так виден; падение сессии не устраиваем.
         }
       }
