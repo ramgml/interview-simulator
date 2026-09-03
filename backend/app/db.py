@@ -3,7 +3,7 @@
 import logging
 from pathlib import Path
 
-from sqlalchemy import Engine, create_engine, func, select
+from sqlalchemy import Engine, create_engine, event, func, select
 from sqlalchemy.orm import Session as DbSession
 from sqlalchemy.orm import sessionmaker
 
@@ -30,17 +30,34 @@ def ensure_data_dir(url: str) -> None:
         Path(url.removeprefix("sqlite:///")).parent.mkdir(parents=True, exist_ok=True)
 
 
+def _sqlite_connect_pragmas(dbapi_connection, _connection_record) -> None:
+    """Прагмы каждого sqlite-соединения: WAL + busy_timeout (T155).
+
+    WAL: читатели не блокируют писателя и наоборот; длинная LLM-задача больше не держит
+    БД для параллельных записей. busy_timeout=10000: конкурентная запись дождётся лока
+    вместо мгновенного `database is locked` (дефолт python-sqlite3 — 5с; удвоен с запасом
+    на ретраи внутри одной транзакции). Прагмы персистентны только для journal_mode
+    (файл), busy_timeout — на соединение, поэтому ставится на каждое.
+    """
+    cursor = dbapi_connection.cursor()
+    cursor.execute("PRAGMA journal_mode=WAL")
+    cursor.execute("PRAGMA busy_timeout=10000")
+    cursor.close()
+
+
 def make_engine(database_url: str | None = None) -> Engine:
     """Engine из settings.DATABASE_URL; sqlite-пути якорит к корню репозитория."""
     url = _repo_relative_sqlite_url(database_url or settings.database_url)
     ensure_data_dir(url)
-    return create_engine(
+    is_sqlite = url.startswith("sqlite")
+    engine = create_engine(
         url,
-        connect_args={"check_same_thread": False}
-        if url.startswith("sqlite")
-        else {},
+        connect_args={"check_same_thread": False} if is_sqlite else {},
         pool_pre_ping=True,
     )
+    if is_sqlite:
+        event.listens_for(engine, "connect")(_sqlite_connect_pragmas)
+    return engine
 
 
 engine = make_engine()

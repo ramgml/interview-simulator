@@ -102,6 +102,10 @@ async def answer_session(
         transcript = text.strip()
 
     _add_turn(db, session, role="candidate", text=transcript, stt_confidence=confidence)
+    # Короткая write-транзакция: ход кандидата в БД ДО conduct_turn (T155) — LLM-вызов
+    # (секунды-минуты с ретраями) не держит write-лок, параллельные записи не падают
+    # `database is locked`. При InterviewError ниже ход кандидата остаётся сохранённым.
+    db.commit()
     turns = _turns_of(db, session)
     try:
         client = llm.get_client(_settings(db))

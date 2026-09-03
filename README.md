@@ -56,6 +56,15 @@ make mlflow-ui   # MLflow UI: http://localhost:5100
 | STT | `WHISPER_DEVICE=cpu\|cuda\|auto` (дефолт `auto` → CUDA при наличии, иначе CPU) | Скачивание через `make models` обязательно; без кэша whisper не стартует |
 | TTS | порядок в `app/tts.py`: артефакт → `torch.hub` → `source='local'` | Без артефакта основной путь недоступен; фолбэк `source='local'` требует репозитория `snakers4/silero-models` |
 
+## База данных: SQLite WAL (T155)
+
+`app.db` работает в WAL-режиме (`PRAGMA journal_mode=WAL`, ставится автоматически на
+каждом соединении в `backend/app/db.py`) — LLM-вызов во время `/answer` больше не держит
+write-лок: параллельные записи (`PUT /api/settings`, второй `/answer`) не падают
+`database is locked`. `data/mlflow.db` отдельный файл: чтобы перевести его на WAL,
+выполните разово `sqlite3 data/mlflow.db "PRAGMA journal_mode=WAL;"` (режим персистентен
+на файле).
+
 ## Состояние репозитория (каркас, T128)
 
 Директорий `backend/` и `frontend/` ещё нет — они появятся в следующих задачах (T129+). Поэтому make-цели `setup`, `models`, `backend`, `frontend`, `dev`, `test`, `lint` сейчас завершаются ошибкой с пояснением (ненулевой код выхода — ожидаемое поведение).
