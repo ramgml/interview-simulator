@@ -50,12 +50,22 @@ export default function SessionPage() {
   useEffect(() => {
     if (startedRef.current) return;
     startedRef.current = true;
-    void startSession(id)
-      .then(setSession)
+    // Вход на уже начатую сессию (refresh/ремаунт): стартуем только created,
+    // иначе тянем состояние как есть — иначе бэк отвечает 409 «Сессия уже начата».
+    getSession(id)
+      .then(async (state) => {
+        if (state.status === "created") {
+          setSession(await startSession(id));
+        } else if (state.status === "completed") {
+          goToReport();
+        } else {
+          setSession(state);
+        }
+      })
       .catch((exc: unknown) =>
-        setError(exc instanceof ApiError ? exc.message : "Не удалось начать сессию"),
+        setError(exc instanceof ApiError ? exc.message : "Не удалось загрузить сессию"),
       );
-  }, [id]);
+  }, [id, goToReport]);
 
   function handleAnswered(answer: AnswerOut) {
     if (answer.done) {
