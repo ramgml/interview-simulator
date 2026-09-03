@@ -54,7 +54,7 @@ def _plan(session: Session) -> dict:
         return {}
 
 
-def build_plan(client: OpenAI, session: Session) -> dict:
+def build_plan(client: OpenAI, session: Session, model: str) -> dict:
     """PLAN: вакансия → план интервью через json_chat. Ошибка LLM — наружу как есть."""
     system = PLAN_SYSTEM_TEMPLATE.substitute(
         seniority=session.seniority or "не указан", language=session.language
@@ -63,7 +63,7 @@ def build_plan(client: OpenAI, session: Session) -> dict:
         {"role": "system", "content": system},
         {"role": "user", "content": session.vacancy_text[:VACANCY_MAX_CHARS]},
     ]
-    return json_chat(client, session.style, messages, temperature=0.2, max_tokens=4000)
+    return json_chat(client, model, messages, temperature=0.2, max_tokens=4000)
 
 
 def first_question(plan: dict) -> str | None:
@@ -87,7 +87,9 @@ def _unasked_question(plan: dict, transcript_turns: list[dict]) -> str | None:
     return None
 
 
-def conduct_turn(client: OpenAI, session: Session, transcript_turns: list[dict]) -> dict:
+def conduct_turn(
+    client: OpenAI, session: Session, transcript_turns: list[dict], model: str
+) -> dict:
     """TURN: план+транскрипт (до 24 ходов) → решение followup/next_question/finish.
 
     Деградация: InterviewError от LLM → следующий незаданный вопрос из plan_json;
@@ -106,7 +108,7 @@ def conduct_turn(client: OpenAI, session: Session, transcript_turns: list[dict])
         },
     ]
     try:
-        return json_chat(client, session.style, messages, temperature=0.2, max_tokens=1000)
+        return json_chat(client, model, messages, temperature=0.2, max_tokens=1000)
     except InterviewError:
         logger.warning("conduct_turn fallback for session %s", session.id)
         question = _unasked_question(_plan(session), transcript_turns)

@@ -61,7 +61,7 @@ def _transcript(session: Session) -> list[dict]:
     return [{"turn_idx": t.idx, "role": t.role, "text": t.text} for t in rows]
 
 
-def evaluate(client: OpenAI, session: Session) -> dict:
+def evaluate(client: OpenAI, session: Session, model: str) -> dict:
     """EVAL: план+транскрипт → отчёт по схеме через json_chat.
 
     Деградация: InterviewError (двойная ошибка JSON/недоступность LLM) → degraded-отчёт,
@@ -78,7 +78,7 @@ def evaluate(client: OpenAI, session: Session) -> dict:
         },
     ]
     try:
-        return json_chat(client, session.style, messages, temperature=0.2, max_tokens=4000)
+        return json_chat(client, model, messages, temperature=0.2, max_tokens=4000)
     except InterviewError:
         logger.warning("evaluate degraded fallback for session %s", session.id)
         return degraded_report()
