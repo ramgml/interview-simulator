@@ -70,6 +70,7 @@ def get_model() -> WhisperModel:
             device,
             compute_type,
         )
+    return _model
 
 
 def decode_audio(data: bytes) -> np.ndarray:

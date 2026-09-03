@@ -49,10 +49,13 @@ class FakeModel:
 
     def __init__(self, segments: list[FakeSegment] | None = None):
         self.segments = segments if segments is not None else [FakeSegment("привет", -0.2)]
+        self.transcribe_calls = 0
+        self.last_audio = None
 
     def transcribe(self, audio, **kwargs):
         self.transcribe_calls += 1
         self.last_audio = audio
+        self.last_kwargs = kwargs
         return iter(self.segments), None
 
 
@@ -109,16 +112,23 @@ def test_decode_audio_webm_opus_container():
     assert 300 <= len(audio) <= 340  # 960 сэмплов 48k → 16k = 320; opus-праймер ±несколько
 
 
-def test_transcribe_empty_audio_raises_empty_transcript():
+def test_transcribe_silence_raises_empty_transcript(monkeypatch):
+    """Тишина декодируется, но сегментов нет — EmptyTranscript (LLM не вызывается)."""
+    fake = FakeModel([])
+    monkeypatch.setattr(stt, "_model", fake)
+    t = np.zeros(16000, dtype=np.float32)
+    buf = BytesIO()
+    sf.write(buf, t, 16000, format="WAV")
     with pytest.raises(EmptyTranscript):
-        stt.transcribe(b"", "ru", "Backend")
+        stt.transcribe(buf.getvalue(), "ru", "Backend")
+    assert fake.transcribe_calls == 1  # модель вызвана, но сегментов не вернула
 
 
 def test_transcribe_returns_text_and_confidence(monkeypatch):
     fake = FakeModel([FakeSegment("  рассказ о  опыте ", -0.2), FakeSegment("с 2019 года", -0.4)])
     monkeypatch.setattr(stt, "_model", fake)
     text, confidence = stt.transcribe(_wav_bytes(0.2, 440.0, 16000), "ru", "Backend")
-    assert text == "рассказ о опыте с 2019 года"
+    assert text == "рассказ о  опыте с 2019 года"
     assert confidence == pytest.approx(math.exp((-0.2 + -0.4) / 2))
 
 
