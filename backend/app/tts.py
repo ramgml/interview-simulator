@@ -22,7 +22,10 @@ logger = logging.getLogger(__name__)
 # Контракт синтеза: wav 24 кГц (docs/ARCHITECTURE.md §Голос).
 SAMPLE_RATE = 24000
 
-# Свыше 300 символов текст режется на предложения и синтезируется по частям.
+# Свыше 300 символов текст режется на предложения; предложение длиннее
+# MAX_CHUNK_CHARS дополнительно режется по словам (одиночное сверхдлинное слово —
+# жёстко по границе), каждая часть ≤ MAX_CHUNK_CHARS символов; части синтезируются
+# по очереди и склеиваются в один непрерывный wav.
 MAX_CHUNK_CHARS = 300
 
 # Голоса silero v4_ru; random — случайный голос, генерируется моделью.
@@ -104,6 +107,31 @@ def split_sentences(text: str) -> list[str]:
     return parts or [text.strip()]
 
 
+def _split_chunk(text: str) -> list[str]:
+    """Часть ≤ MAX_CHUNK_CHARS: по словам; сверхдлинное одиночное слово — жёстко."""
+    words = text.split()
+    chunks: list[str] = []
+    cur: list[str] = []
+    size = 0
+    for word in words:
+        while len(word) > MAX_CHUNK_CHARS:  # слово без пробелов длиннее границы
+            if cur:
+                chunks.append(" ".join(cur))
+                cur, size = [], 0
+            chunks.append(word[:MAX_CHUNK_CHARS])
+            word = word[MAX_CHUNK_CHARS:]
+        extra = len(word) + (1 if cur else 0)
+        if size + extra > MAX_CHUNK_CHARS:
+            chunks.append(" ".join(cur))
+            cur, size = [word], len(word)
+        else:
+            cur.append(word)
+            size += extra
+    if cur:
+        chunks.append(" ".join(cur))
+    return chunks
+
+
 def _synthesize_chunk(model: torch.nn.Module, text: str, voice: str) -> torch.Tensor:
     """Один вызов apply_tts: Tensor float32 mono на cpu (24 кГц)."""
     try:
@@ -114,14 +142,17 @@ def _synthesize_chunk(model: torch.nn.Module, text: str, voice: str) -> torch.Te
 
 
 def synthesize(text: str, voice: str = "kseniya") -> bytes:
-    """Текст → wav bytes (mono, SAMPLE_RATE). Длинный текст — по предложениям, один wav."""
+    """Текст → wav bytes (mono, SAMPLE_RATE). Длинный текст — по предложениям, один wav.
+
+    Сверхдлинные предложения дополнительно режутся по словам, каждая часть ≤ MAX_CHUNK_CHARS.
+    """
     if not text or not text.strip():
         raise TtsEmptyText("Пустой текст для озвучки")
     if voice not in VOICES:
         raise InterviewError(f"Неизвестный голос: {voice}")
 
     model = get_model()
-    chunks = split_sentences(text)
+    chunks = [sub for sentence in split_sentences(text) for sub in _split_chunk(sentence)]
     parts = [_synthesize_chunk(model, chunk, voice) for chunk in chunks]
     audio = parts[0] if len(parts) == 1 else torch.cat(parts)
 
