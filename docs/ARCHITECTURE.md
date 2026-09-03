@@ -53,6 +53,7 @@ interview-simulator/            (monorepo, main → origin)
 
 - `get_client(s) -> openai.OpenAI`: `provider=='local'` → `base_url=env.LOCAL_LLM_BASE_URL`, `api_key='sk-local'`; `'cloud'` → `base_url/api_key/model` из DB (обязательны — иначе `InterviewError('Заполните облачный провайдер в настройках')`). Читает DB на каждый вызов — смена провайдера без рестарта.
 - `chat(client, model, messages, *, temperature, max_tokens) -> tuple[str, dict]` — `(content, usage)`; недоступность endpoint → `InterviewError` → 502 наружу.
+- `resolve_model(s) -> str`: имя модели для LLM-вызовов: `local` → `env.local_llm_model`, `cloud` → DB `settings.model` (пустая — `InterviewError('Заполните модель облачного провайдера в настройках')`); стиль сессии именем модели не является (T152).
 - `json_chat(...) -> dict`: `chat` → срез ```json-заборов → `json.loads`; при ошибке один ретрай с доп. system «Верни только валидный JSON без пояснений»; вторая ошибка → `InterviewError`.
 
 ## Голос

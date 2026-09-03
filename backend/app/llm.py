@@ -30,6 +30,22 @@ def get_client(s: Settings) -> OpenAI:
     raise InterviewError(f"Unknown provider: {s.provider}")
 
 
+def resolve_model(s: Settings) -> str:
+    """Имя модели для json_chat из строки настроек; provider='local' → env-модель, 'cloud' → DB.
+
+    Единственный источник имени модели для LLM-вызовов (ARCHITECTURE §LLM-слой);
+    стиль сессии сюда не попадает (T152).
+    """
+    if s.provider == "local":
+        return env.local_llm_model
+    if s.provider == "cloud":
+        model = (s.model or "").strip()
+        if not model:
+            raise InterviewError("Заполните модель облачного провайдера в настройках")
+        return model
+    raise InterviewError(f"Unknown provider: {s.provider}")
+
+
 def chat(
     client: OpenAI, model: str, messages: list[dict], *, temperature: float, max_tokens: int
 ) -> tuple[str, dict]:
