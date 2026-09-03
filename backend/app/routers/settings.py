@@ -65,15 +65,15 @@ def update_settings(payload: SettingsUpdate, db: DbSession = Depends(get_db)) ->
 def test_settings(db: DbSession = Depends(get_db)) -> dict[str, object]:
     """GET /api/settings/test: local — лёгкий вызов client.models.list(); cloud — требует
     заполненные base_url/api_key/model (иначе 422 с внятным текстом); ошибка соединения → 502."""
-    # ЛЕНИВЫЙ импорт: app.llm появится в T130; верхний уровень сломал бы сборку тестов до его мержа
-    from app.llm import get_client
-
     row = _get_row(db)
     if row.provider == "cloud" and not (row.base_url and row.api_key and row.model):
         raise HTTPException(
             status_code=422,
             detail="Заполните облачный провайдер в настройках: base_url, api_key и model",
         )
+    # ЛЕНИВЫЙ импорт: app.llm появится в T130; верхний уровень сломал бы сборку тестов до его мержа
+    from app.llm import get_client
+
     try:
         client = get_client(row)
         client.models.list()
