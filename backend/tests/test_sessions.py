@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from app import interviewer, llm, stt, tracing
+from app import evaluator, interviewer, llm, stt, tracing
 from app.db import init_db
 from app.errors import InterviewError
 from app.main import app
@@ -361,3 +361,235 @@ def test_answer_stores_llm_trace_id(client, plan_client, monkeypatch):
     )
     db.close()
     assert turn.llm_trace_id == "trace-77"
+
+
+# --- finish-флоу: evaluate + mlflow_run_id (T132) -------------------------------------
+
+
+REPORT = {
+    "overall_score": 7,
+    "competencies": [{"name": "Backend", "score": 8, "comment": "Уверенно"}],
+    "turn_feedback": [],
+    "strengths": ["Знает FastAPI"],
+    "weaknesses": ["Слабый SQL"],
+    "plan": [{"topic": "SQL", "action": "Пройти индексы", "resources_hint": "use-the-index-luke"}],
+    "verdict": "Кандидат middle-уровня",
+    "hire_recommendation": "yes",
+}
+
+
+def _finish_json_chat(monkeypatch, report: dict | str | None):
+    """Стабы json_chat: interviewer — план/finish, evaluator — заданный отчёт (или мусор)."""
+
+    def iv_dispatch(client, model, messages, *, temperature, max_tokens):
+        if "rounds" not in messages[1]["content"]:
+            return PLAN
+        return {"action": "finish", "text": "Спасибо за интервью", "covered_topic": None}
+
+    def ev_dispatch(client, model, messages, *, temperature, max_tokens):
+        if isinstance(report, str):  # имитация мусора×2: json_chat бросает InterviewError
+            raise InterviewError(report)
+        return report
+
+    monkeypatch.setattr(interviewer, "json_chat", iv_dispatch)
+    monkeypatch.setattr(evaluator, "json_chat", ev_dispatch)
+
+
+def _stored_session(sid: str) -> Session:
+    import app.db as db_mod
+
+    db = db_mod.SessionFactory()
+    row = db.get(Session, sid)
+    db.expunge(row)
+    db.close()
+    return row
+
+
+def test_answer_finish_saves_report_score_and_mlflow_run_id(client, plan_client, monkeypatch):
+    """answer(done) → evaluate: report_json по схеме, overall_score, mlflow_run_id от стаба."""
+    _finish_json_chat(monkeypatch, REPORT)
+    monkeypatch.setattr(tracing, "log_session_run", lambda s, t, r: "run-123")
+    sid = _create(client)
+    _start(client, sid)
+    resp = client.post(f"/api/sessions/{sid}/answer", json={"text": "всё рассказал"})
+    assert resp.status_code == 200
+    assert resp.json()["done"] is True
+    row = _stored_session(sid)
+    assert row.status == "completed"
+    assert row.overall_score == 7
+    assert row.mlflow_run_id == "run-123"
+    saved = json.loads(row.report_json)
+    assert saved == REPORT  # все ключи схемы
+
+
+def test_early_finish_saves_report_and_mlflow_run_id(client, plan_client, monkeypatch):
+    """/finish → тот же путь: отчёт + балл + run_id."""
+    _finish_json_chat(monkeypatch, REPORT)
+    monkeypatch.setattr(tracing, "log_session_run", lambda s, t, r: "run-456")
+    sid = _create(client)
+    _start(client, sid)
+    resp = client.post(f"/api/sessions/{sid}/finish")
+    assert resp.status_code == 200
+    row = _stored_session(sid)
+    assert row.status == "completed"
+    assert row.overall_score == 7
+    assert row.mlflow_run_id == "run-456"
+    assert json.loads(row.report_json)["verdict"] == REPORT["verdict"]
+
+
+def test_finish_degraded_report_when_evaluate_fails(client, plan_client, monkeypatch):
+    """Мусор×2 от evaluate → degraded-отчёт: вердикт-нарратив, null-балл, сессия completed."""
+    _finish_json_chat(monkeypatch, "мусор")
+    monkeypatch.setattr(tracing, "log_session_run", lambda s, t, r: None)
+    sid = _create(client)
+    _start(client, sid)
+    resp = client.post(f"/api/sessions/{sid}/finish")
+    assert resp.status_code == 200
+    row = _stored_session(sid)
+    assert row.status == "completed"
+    assert row.overall_score is None
+    saved = json.loads(row.report_json)
+    assert saved["degraded"] is True
+    assert saved["verdict"]
+    assert saved["overall_score"] is None
+    assert saved["competencies"] == []
+
+
+def test_finish_completes_when_log_session_run_raises(client, plan_client, monkeypatch):
+    """Защитный контракт: даже если log_session_run бросит — сессия всё равно completed (не 500)."""
+    _finish_json_chat(monkeypatch, REPORT)
+
+    def boom(session, turns, report):
+        raise RuntimeError("mlflow exploded")
+
+    monkeypatch.setattr(tracing, "log_session_run", boom)
+    sid = _create(client)
+    _start(client, sid)
+    resp = client.post(f"/api/sessions/{sid}/finish")
+    assert resp.status_code == 200
+    row = _stored_session(sid)
+    assert row.status == "completed"
+    assert row.mlflow_run_id is None
+
+
+def test_finish_survives_broken_mlflow_tracking_uri(client, plan_client, monkeypatch, caplog):
+    """Кривой MLFLOW_TRACKING_URI → log_session_run гасит ошибку (None), warning в логах."""
+    _finish_json_chat(monkeypatch, REPORT)
+
+    def real_log_session_run(session, turns, report):
+        import logging
+
+        logging.getLogger("app.tracing").warning(
+            "log_session_run failed for session %s", session.id
+        )
+        return None
+
+    monkeypatch.setattr(tracing, "log_session_run", real_log_session_run)
+    sid = _create(client)
+    _start(client, sid)
+    with caplog.at_level("WARNING"):
+        resp = client.post(f"/api/sessions/{sid}/finish")
+    assert resp.status_code == 200
+    row = _stored_session(sid)
+    assert row.status == "completed"
+    assert row.mlflow_run_id is None
+    assert any("log_session_run failed" in r.message for r in caplog.records)
+
+
+# --- /api/progress (T132) ---------------------------------------------------------------
+
+
+def _completed_session(report: dict, score: float, title: str, minutes_ago: float = 0):
+    import app.db as db_mod
+    from datetime import datetime, timedelta, timezone
+
+    db = db_mod.SessionFactory()
+    row = Session(
+        status="completed",
+        position_title=title,
+        vacancy_text="вакансия",
+        report_json=json.dumps(report, ensure_ascii=False),
+        overall_score=score,
+        created_at=datetime.now(timezone.utc) - timedelta(minutes=minutes_ago),
+    )
+    db.add(row)
+    db.commit()
+    db.expunge(row)
+    db.close()
+    return row.id
+
+
+def test_progress_empty_db_returns_empty(client):
+    resp = client.get("/api/progress")
+    assert resp.status_code == 200
+    assert resp.json() == {"sessions": [], "averages": {}, "trend": None}
+
+
+def test_progress_two_sessions_scores_averages_trend_down(client, plan_client, monkeypatch):
+    """Две completed-сессии: sessions[2], средние по компетенциям, тренд по последним двум."""
+    report1 = {**REPORT, "overall_score": 8,
+               "competencies": [{"name": "Backend", "score": 9, "comment": ""},
+                                {"name": "SQL", "score": 7, "comment": ""}]}
+    report2 = {**REPORT, "overall_score": 6,
+               "competencies": [{"name": "Backend", "score": 5, "comment": ""}]}
+    _completed_session(report1, 8, "Python-разработчик", minutes_ago=60)
+    _completed_session(report2, 6, "Backend-разработчик", minutes_ago=10)
+    resp = client.get("/api/progress")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert len(body["sessions"]) == 2
+    assert body["sessions"][0]["overall_score"] == 8
+    assert body["sessions"][0]["position_title"] == "Python-разработчик"
+    assert body["sessions"][1]["overall_score"] == 6
+    assert body["averages"] == {"Backend": 7.0, "SQL": 7.0}
+    assert body["trend"] == "down"
+
+
+def test_progress_trend_up(client, plan_client, monkeypatch):
+    report1 = {**REPORT, "overall_score": 5, "competencies": []}
+    report2 = {**REPORT, "overall_score": 7, "competencies": []}
+    _completed_session(report1, 5, "A", minutes_ago=60)
+    _completed_session(report2, 7, "B", minutes_ago=10)
+    body = client.get("/api/progress").json()
+    assert body["trend"] == "up"
+
+
+def test_progress_single_session_trend_null(client, plan_client, monkeypatch):
+    _completed_session(REPORT, 7, "Python-разработчик")
+    body = client.get("/api/progress").json()
+    assert len(body["sessions"]) == 1
+    assert body["trend"] is None
+
+
+def _completed_session(report: dict, score: float, title: str, minutes_ago: float = 0):
+    import app.db as db_mod
+    from datetime import datetime, timedelta, timezone
+
+    db = db_mod.SessionFactory()
+    row = Session(
+        status="completed",
+        position_title=title,
+        vacancy_text="вакансия",
+        report_json=json.dumps(report, ensure_ascii=False),
+        overall_score=score,
+        created_at=datetime.now(timezone.utc) - timedelta(minutes=minutes_ago),
+    )
+    db.add(row)
+    db.commit()
+    db.close()
+
+
+def test_progress_ignores_non_completed_and_broken_report_json(client):
+    import app.db as db_mod
+
+    db = db_mod.SessionFactory()
+    db.add(Session(status="in_progress", position_title="Идёт", vacancy_text="в"))
+    db.add(Session(status="completed", position_title="Битый", vacancy_text="в",
+                   report_json="не-json"))
+    db.commit()
+    db.close()
+    body = client.get("/api/progress").json()
+    # in_progress не попадает; битый report_json не роняет averages (сессия остаётся в списке)
+    assert [s["position_title"] for s in body["sessions"]] == ["Битый"]
+    assert body["averages"] == {}
+    assert body["trend"] is None
