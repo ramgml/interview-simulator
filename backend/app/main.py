@@ -1,6 +1,6 @@
 """FastAPI-приложение: CORS :3000, lifespan (create_all + сид), GET /health.
 
-Роутеры sessions/settings/audio подключаются в T130+ (пустых заглушек не создаём).
+Роутер audio (/api/stt) подключён в T134; sessions/settings — в T130+.
 """
 
 import logging
@@ -10,6 +10,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.db import init_db
+from app.stt import router as stt_router
 
 logging.basicConfig(level=logging.INFO)
 
@@ -29,6 +30,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+app.include_router(stt_router)
 
 
 @app.get("/health")
