@@ -146,6 +146,19 @@ def test_transcribe_passes_whisper_params_and_prompt(monkeypatch):
     assert kw["initial_prompt"].endswith("Big-O.")
 
 
+def test_transcribe_low_confidence_garbage_raises_empty_transcript(monkeypatch):
+    """Галлюцинация на неречевом аудио («Субтитры создавал…», пунктуация) — EmptyTranscript."""
+    fake = FakeModel([FakeSegment("Субтитры создавал DimaTorzok", -1.5)])
+    monkeypatch.setattr(stt, "_model", fake)
+    with pytest.raises(EmptyTranscript):
+        stt.transcribe(_wav_bytes(0.2, 440.0, 16000), "ru", "Backend")
+
+    fake_dot = FakeModel([FakeSegment(".", -0.9)])
+    monkeypatch.setattr(stt, "_model", fake_dot)
+    with pytest.raises(EmptyTranscript):
+        stt.transcribe(_wav_bytes(0.2, 440.0, 16000), "ru", "Backend")
+
+
 def test_transcribe_empty_text_raises_empty_transcript(monkeypatch):
     fake = FakeModel([FakeSegment("", -0.1), FakeSegment("  ", -0.1)])
     monkeypatch.setattr(stt, "_model", fake)

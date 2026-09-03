@@ -86,6 +86,17 @@ def decode_audio(data: bytes) -> np.ndarray:
     return np.concatenate(chunks).astype(np.float32) if chunks else np.zeros(0, dtype=np.float32)
 
 
+def _no_speech(text: str, logprobs: list[float]) -> bool:
+    """Эвристика галлюцинации: low-confidence мусор (пунктуация, «Субтитры создавал…»)
+    на неречевом аудио (тон/шум) считается распознанной речью — это не так (PRD:
+    в транскрипт только речь). Осмысленная речь имеет avg_logprob > -0.9; мусор — ниже.
+    """
+    if logprobs and max(logprobs) < -0.9:
+        return True
+    stripped = text.replace(" ", "").replace(".", "").replace(",", "").replace("…", "")
+    return len(stripped) == 0
+
+
 def transcribe(data: bytes, language: str, position_title: str) -> tuple[str, float]:
     """Аудио → (текст, confidence=exp(avg_logprob)). Пустой текст → EmptyTranscript."""
     audio = decode_audio(data)
@@ -107,7 +118,7 @@ def transcribe(data: bytes, language: str, position_title: str) -> tuple[str, fl
         texts.append(seg.text.strip())
         logprobs.append(seg.avg_logprob)
     text = " ".join(t for t in texts if t).strip()
-    if not text:
+    if not text or _no_speech(text, logprobs):
         raise EmptyTranscript()
     confidence = math.exp(sum(logprobs) / len(logprobs))
     return text, confidence
