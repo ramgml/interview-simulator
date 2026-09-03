@@ -76,11 +76,16 @@ class FakeWhisper:
 def client(monkeypatch, tmp_path):
     """TestClient на временной БД; per-test isolation без общего data/."""
     import app.db as db_mod
+    import app.evaluator as evaluator_mod
 
     db_path = tmp_path / "test.db"
     url = f"sqlite:///{db_path}"
     monkeypatch.setattr(db_mod, "engine", db_mod.make_engine(url))
     monkeypatch.setattr(db_mod, "SessionFactory", db_mod.sessionmaker(bind=db_mod.engine))
+    # evaluate._transcript читает global SessionFactory — якорим на ту же tmp-БД (T152).
+    monkeypatch.setattr(
+        evaluator_mod, "SessionFactory", db_mod.sessionmaker(bind=db_mod.engine)
+    )
 
     init_db()
 
@@ -92,11 +97,12 @@ def client(monkeypatch, tmp_path):
 
 @pytest.fixture()
 def plan_client(monkeypatch):
-    """json_chat стаб: start → план, answer → next_question; счётчик вызовов."""
-    calls = {"count": 0}
+    """json_chat стаб: start → план, answer → next_question; счётчик и модели вызовов."""
+    calls = {"count": 0, "models": []}
 
     def fake_json_chat(client, model, messages, *, temperature, max_tokens):
         calls["count"] += 1
+        calls["models"].append(model)
         first_user = messages[1]["content"]
         if "rounds" not in first_user:
             # PLAN-вызов: user = вакансия → возвращаем план
@@ -494,6 +500,40 @@ def test_finish_survives_broken_mlflow_tracking_uri(client, plan_client, monkeyp
     assert row.status == "completed"
     assert row.mlflow_run_id is None
     assert any("log_session_run failed" in r.message for r in caplog.records)
+
+
+# --- модель в LLM-вызовах: settings, не стиль сессии (T152) ----------------------------
+
+
+def test_llm_calls_use_settings_model_not_session_style(client, plan_client, monkeypatch):
+    """create → start → answer → finish: каждая модель в json_chat — из настроек, не стиль."""
+    from app import evaluator as evaluator_mod
+    from app.config import settings as env
+
+    monkeypatch.setattr(env, "local_llm_model", "test-local-model-t152")
+
+    def ev_json_chat(client, model, messages, *, temperature, max_tokens):
+        plan_client["count"] += 1
+        plan_client["models"].append(model)
+        return REPORT
+
+    monkeypatch.setattr(evaluator_mod, "json_chat", ev_json_chat)
+
+    resp = client.post(
+        "/api/sessions", json={"vacancy_text": "Python: FastAPI, PostgreSQL", "style": "friendly"}
+    )
+    assert resp.status_code == 200
+    sid = resp.json()["id"]
+    assert _start(client, sid)["status"] == "in_progress"
+    answer = client.post(f"/api/sessions/{sid}/answer", json={"text": "рассказываю про DI"})
+    assert answer.status_code == 200 and answer.json()["action"] == "next_question"
+    finish = client.post(f"/api/sessions/{sid}/finish")
+    assert finish.status_code == 200 and finish.json()["status"] == "completed"
+
+    assert plan_client["count"] == 3  # PLAN + TURN + EVAL
+    for model in plan_client["models"]:
+        assert model == env.local_llm_model
+        assert model not in {"friendly", "strict", "realistic"}
 
 
 # --- /api/progress (T132) ---------------------------------------------------------------

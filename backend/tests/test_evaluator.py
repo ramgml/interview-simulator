@@ -1,6 +1,7 @@
 """Тесты оценщика (T132): evaluate — схема отчёта, degraded-fallback. Без сети."""
 
 import json
+import pytest
 from types import SimpleNamespace
 
 from app import evaluator
@@ -27,6 +28,16 @@ REPORT = {
     "verdict": "Кандидат middle-уровня",
     "hire_recommendation": "yes",
 }
+
+
+@pytest.fixture(autouse=True)
+def _transcript_db_on_tmp_path(tmp_path, monkeypatch):
+    """Транскрипт в evaluate читает глобальный SessionFactory — якорим его на tmp_path."""
+    import app.db as db_mod
+
+    engine = db_mod.make_engine(f"sqlite:///{tmp_path / 'transcript.db'}")
+    db_mod.Base.metadata.create_all(engine)
+    monkeypatch.setattr(evaluator, "SessionFactory", db_mod.sessionmaker(bind=engine))
 
 
 class FakeClient:
@@ -106,7 +117,7 @@ REPORT_JSON = json.dumps(REPORT, ensure_ascii=False)
 
 def test_evaluate_valid_json_returns_report_by_schema():
     client = FakeClient([REPORT_JSON])
-    report = evaluate(client, make_session())
+    report = evaluate(client, make_session(), model="test-model")
     assert set(report) == {
         "overall_score",
         "competencies",
@@ -124,7 +135,8 @@ def test_evaluate_valid_json_returns_report_by_schema():
 
 def test_evaluate_sends_plan_and_transcript():
     client = FakeClient([REPORT_JSON])
-    evaluate(client, make_session())
+    evaluate(client, make_session(), model="test-model")
+    assert client.calls[0]["model"] == "test-model"
     system = client.calls[0]["messages"][0]["content"]
     payload = json.loads(client.calls[0]["messages"][1]["content"])
     assert "TOЛЬКО JSON" in system or "ТОЛЬКО JSON" in system
@@ -135,20 +147,20 @@ def test_evaluate_sends_plan_and_transcript():
 def test_evaluate_strips_json_fences():
     fenced = f"```json\n{REPORT_JSON}\n```"
     client = FakeClient([fenced])
-    report = evaluate(client, make_session())
+    report = evaluate(client, make_session(), model="test-model")
     assert report["overall_score"] == 7
 
 
 def test_evaluate_temperature_is_02():
     client = FakeClient([REPORT_JSON])
-    evaluate(client, make_session())
+    evaluate(client, make_session(), model="test-model")
     assert client.calls[0]["temperature"] == 0.2
 
 
 def test_evaluate_wraps_in_json_fence_with_single_retry_and_parses():
     """Ретрай внутри json_chat: второй ответ в заборах — всё ещё валидный отчёт."""
     client = FakeClient(["мусор", f"```json\n{REPORT_JSON}\n```"])
-    report = evaluate(client, make_session())
+    report = evaluate(client, make_session(), model="test-model")
     assert report["overall_score"] == 7
     assert client.call_count == 2
 
@@ -156,10 +168,18 @@ def test_evaluate_wraps_in_json_fence_with_single_retry_and_parses():
 # --- evaluate: degraded-fallback ------------------------------------------------------
 
 
+def test_evaluate_sends_model_not_session_style():
+    """EVAL: model — из параметра, не стиль сессии (T152)."""
+    client = FakeClient([REPORT_JSON])
+    evaluate(client, make_session(style="friendly"), model="glm/glm-5.3-flash")
+    assert client.calls[0]["model"] == "glm/glm-5.3-flash"
+    assert client.calls[0]["model"] not in {"friendly", "strict", "realistic"}
+
+
 def test_evaluate_garbage_twice_returns_degraded_with_verdict_and_nulls(caplog):
     client = FakeClient(["совсем не json", "опять мусор"])
     with caplog.at_level("WARNING"):
-        report = evaluate(client, make_session())
+        report = evaluate(client, make_session(), model="test-model")
     assert report["degraded"] is True
     assert report["verdict"] == degraded_report()["verdict"]
     assert report["overall_score"] is None
@@ -172,7 +192,7 @@ def test_evaluate_garbage_twice_returns_degraded_with_verdict_and_nulls(caplog):
 
 def test_evaluate_llm_down_returns_degraded_not_raises():
     client = FailingClient(ConnectionError("down"))
-    report = evaluate(client, make_session())
+    report = evaluate(client, make_session(), model="test-model")
     assert report["degraded"] is True
     assert report["overall_score"] is None
     assert report["verdict"]
@@ -200,7 +220,7 @@ def test_evaluate_json_chat_error_mocked_is_degraded(monkeypatch):
         raise InterviewError("LLM returned invalid JSON")
 
     monkeypatch.setattr(evaluator, "json_chat", boom)
-    report = evaluate(FailingClient(ConnectionError("down")), make_session())
+    report = evaluate(FailingClient(ConnectionError("down")), make_session(), model="test-model")
     assert report["degraded"] is True
 
 
@@ -231,7 +251,7 @@ def test_evaluate_transcript_reads_turns_from_db(tmp_path, monkeypatch):
         db.commit()
 
     client = FakeClient([REPORT_JSON])
-    evaluate(client, make_session())
+    evaluate(client, make_session(), model="test-model")
     payload = json.loads(client.calls[0]["messages"][1]["content"])
     assert payload["transcript"] == [
         {"turn_idx": 1, "role": "interviewer", "text": "Вопрос?"},

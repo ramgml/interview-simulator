@@ -3,9 +3,17 @@
 import pytest
 from openai import OpenAI
 
+from app import llm
 from app.config import settings as env
 from app.errors import InterviewError
-from app.llm import RETRY_SYSTEM_PROMPT, _strip_json_fences, chat, get_client, json_chat
+from app.llm import (
+    RETRY_SYSTEM_PROMPT,
+    _strip_json_fences,
+    chat,
+    get_client,
+    json_chat,
+    resolve_model,
+)
 
 
 class FakeCompletions:
@@ -88,8 +96,34 @@ def test_get_client_cloud_incomplete_raises(base_url, api_key):
         get_client(make_settings("cloud", base_url=base_url, api_key=api_key))
 
 
-# --- chat ----------------------------------------------------------------------
 
+# --- resolve_model ---------------------------------------------------------------
+
+
+def test_resolve_model_local_uses_env_model(monkeypatch):
+    monkeypatch.setattr(llm.env, "local_llm_model", "test-local-model")
+    assert resolve_model(make_settings("local")) == "test-local-model"
+
+
+def test_resolve_model_cloud_uses_db_model():
+    s = make_settings("cloud", base_url="https://x", api_key="sk-test")
+    s.model = "cloud-model-x"
+    assert resolve_model(s) == "cloud-model-x"
+
+
+def test_resolve_model_cloud_empty_model_raises():
+    s = make_settings("cloud", base_url="https://x", api_key="sk-test")
+    s.model = ""
+    with pytest.raises(InterviewError, match="Заполните модель"):
+        resolve_model(s)
+
+
+def test_resolve_model_unknown_provider_raises():
+    with pytest.raises(InterviewError, match="Unknown provider"):
+        resolve_model(make_settings("hybrid"))
+
+
+# --- chat ----------------------------------------------------------------------
 
 def test_chat_returns_content_and_usage():
     client = FakeClient(FakeResponse('{"ok": true}'))
