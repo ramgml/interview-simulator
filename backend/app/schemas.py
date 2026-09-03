@@ -58,6 +58,21 @@ class SettingsUpdate(BaseModel):
     tts_voice: str | None = None
 
 
+class AnswerText(BaseModel):
+    """Текстовый ход кандидата (альтернатива multipart audio)."""
+
+    text: str = Field(min_length=1)
+
+
+class AnswerOut(BaseModel):
+    """Ответ интервьюера на ход кандидата (ARCHITECTURE §API /answer)."""
+
+    transcript: str | None
+    question_text: str | None
+    done: bool
+    action: str
+
+
 # Озвучка: {text, voice?} → audio/wav (ARCHITECTURE §API, §Голос)
 TtsVoice = Literal["aidar", "baya", "kseniya", "xenia", "eugene", "random"]
 

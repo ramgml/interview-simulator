@@ -1,7 +1,7 @@
 """FastAPI-приложение: CORS :3000, lifespan (create_all + сид), GET /health.
 
-Роутеры: audio (/api/stt) — T134, /api/tts — T135, settings (/api/settings GET/PUT/test) — T133;
-sessions — в T130+.
+Роутеры: audio (/api/stt) — T134, /api/tts — T135, settings (/api/settings GET/PUT/test) — T133,
+sessions (/api/sessions) — T131.
 """
 
 import logging
@@ -11,8 +11,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.db import init_db
+from app.routers import audio, sessions, settings
 from app.stt import router as stt_router
-from app.routers import audio, settings
 
 logging.basicConfig(level=logging.INFO)
 
@@ -33,7 +33,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
 app.include_router(stt_router)
 
 
@@ -42,5 +41,6 @@ def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
+app.include_router(sessions.router)
 app.include_router(settings.router)
 app.include_router(audio.router)
