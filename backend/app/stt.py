@@ -89,9 +89,10 @@ def decode_audio(data: bytes) -> np.ndarray:
 def _no_speech(text: str, logprobs: list[float]) -> bool:
     """Эвристика галлюцинации: low-confidence мусор (пунктуация, «Субтитры создавал…»)
     на неречевом аудио (тон/шум) считается распознанной речью — это не так (PRD:
-    в транскрипт только речь). Осмысленная речь имеет avg_logprob > -0.9; мусор — ниже.
+    в транскрипт только речь). Осмысленная речь в среднем имеет avg_logprob > -0.4;
+    галлюцинации на неречевом аудио стабильно ниже.
     """
-    if logprobs and max(logprobs) < -0.9:
+    if logprobs and max(logprobs) < -0.4:
         return True
     stripped = text.replace(" ", "").replace(".", "").replace(",", "").replace("…", "")
     return len(stripped) == 0
