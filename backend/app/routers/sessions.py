@@ -47,7 +47,7 @@ def start_session(session_id: str, db: DbSession = Depends(get_db)) -> dict:
         raise _http_error(409, f"Сессия уже начата (status={session.status})")
     try:
         client = llm.get_client(_settings(db))
-        plan = interviewer.build_plan(client, session)
+        plan = interviewer.build_plan(client, session, llm.resolve_model(_settings(db)))
     except InterviewError as exc:
         _fail(db, session, exc)
         raise _http_error(502, str(exc)) from exc
@@ -105,7 +105,9 @@ async def answer_session(
     turns = _turns_of(db, session)
     try:
         client = llm.get_client(_settings(db))
-        decision = interviewer.conduct_turn(client, session, _transcript(turns))
+        decision = interviewer.conduct_turn(
+            client, session, _transcript(turns), llm.resolve_model(_settings(db))
+        )
         trace_id = tracing.get_last_trace_id()
     except InterviewError as exc:
         _fail(db, session, exc)
@@ -292,7 +294,7 @@ def _finalize_session(db: DbSession, session: Session) -> None:
     """
     try:
         client = llm.get_client(_settings(db))
-        report = evaluator.evaluate(client, session)
+        report = evaluator.evaluate(client, session, llm.resolve_model(_settings(db)))
     except Exception:
         logger.exception("evaluate failed unexpectedly for session %s — degraded", session.id)
         report = evaluator.degraded_report()
