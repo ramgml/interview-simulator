@@ -153,8 +153,8 @@ def test_transcribe_low_confidence_garbage_raises_empty_transcript(monkeypatch):
     with pytest.raises(EmptyTranscript):
         stt.transcribe(_wav_bytes(0.2, 440.0, 16000), "ru", "Backend")
 
-    fake_dot = FakeModel([FakeSegment(".", -0.9)])
-    monkeypatch.setattr(stt, "_model", fake_dot)
+    fake_stamp = FakeModel([FakeSegment("Редактор субтитров А.Семкин Корректор А.Егорова", -0.1)])
+    monkeypatch.setattr(stt, "_model", fake_stamp)
     with pytest.raises(EmptyTranscript):
         stt.transcribe(_wav_bytes(0.2, 440.0, 16000), "ru", "Backend")
 

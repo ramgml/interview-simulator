@@ -25,6 +25,16 @@ _PROMPT_TECH = (
     "PostgreSQL, gRPC, микросервисы, CI/CD, алгоритмы, Big-O."
 )
 
+# Известные whisper-галлюцинации на неречевом аудио (строки обучающего корпуса субтитров).
+_HALLUCINATION_STAMPS = (
+    "субтитры создавал",
+    "редактор субтитров",
+    "корректор",
+    "продолжение следует",
+    "смотреть до конца",
+    "подписывайтесь на канал",
+)
+
 router = APIRouter(prefix="/api")
 
 _model: WhisperModel | None = None
@@ -87,11 +97,16 @@ def decode_audio(data: bytes) -> np.ndarray:
 
 
 def _no_speech(text: str, logprobs: list[float]) -> bool:
-    """Эвристика галлюцинации: low-confidence мусор (пунктуация, «Субтитры создавал…»)
-    на неречевом аудио (тон/шум) считается распознанной речью — это не так (PRD:
-    в транскрипт только речь). Осмысленная речь в среднем имеет avg_logprob > -0.4;
-    галлюцинации на неречевом аудио стабильно ниже.
+    """Эвристика галлюцинации whisper на неречевом аудио (тон/шум). PRD: в транскрипт
+    только речь. Whisper на неречевом вводе стабильно выдаёт известный мусор:
+    пунктуацию и «Субтитры создавал…» (строки обучающего корпуса) — часто с
+    высоким avg_logprob, поэтому порога по confidence мало: плюс блэклист
+    субтитровых штампов.
     """
+    lowered = text.lower().replace("ё", "е")
+    for stamp in _HALLUCINATION_STAMPS:
+        if stamp in lowered:
+            return True
     if logprobs and max(logprobs) < -0.4:
         return True
     stripped = text.replace(" ", "").replace(".", "").replace(",", "").replace("…", "")
