@@ -37,8 +37,24 @@ make mlflow-ui   # MLflow UI: http://localhost:5100
 
 - `POST /api/tts` `{"text": "...", "voice": "kseniya"}` → `audio/wav` (24 кГц, mono). Голоса: `aidar/baya/kseniya/xenia/eugene/random`; смена голоса — без рестарта (модель — singleton).
 - Текст длиннее 300 символов режется по предложениям и склеивается в один непрерывный wav.
-- Модель строго CPU (VRAM не занимает). Прогрев: `cd backend && uv run python -m app.download_silero` — скачивает артефакт `v4_ru.pt` (~40 МБ, models.silero.ai) в `~/.cache/torch/hub/silero/`. После консолидации `make models` (whisper+silero, отдельный PR `chore(T126)`) прогрев накрывается общей целью.
+- Модель строго CPU (VRAM не занимает). Артефакт `v4_ru.pt` (~40 МБ, models.silero.ai) кладётся в `~/.cache/torch/hub/silero/`; скачивание входит в `make models` (консолидация T141). Отдельный прогрев при необходимости: `cd backend && uv run python -m app.download_silero`.
 - Порядок загрузки в `app/tts.py`: артефакт `v4_ru.pt` → `torch.hub.load('snakers4/silero-models', ...)` → `source='local'`. Фолбэк W200: torch.hub-путь требует `omegaconf` (в зависимостях проекта нет) и доступности репозитория `snakers4/silero-models` на Hugging Face (сейчас отдаёт 404) — поэтому основной путь в этом окружении артефактный.
+
+### Голосовые модели: make models (T141)
+
+`make models` скачивает обе модели одним прогоном (шаги whisper → silero, каждый идемпотентен: повтор — «already cached»):
+
+| Шаг | Модель | Размер | Кэш |
+|---|---|---|---|
+| STT | faster-whisper large-v3-turbo (ct2) | ~1.6 ГБ | `~/.cache/huggingface` |
+| TTS | silero `v4_ru.pt` | ~40 МБ | `~/.cache/torch/hub/silero/` |
+
+Офлайн-фолбэки при первом старте без сети:
+
+| Компонент | Настройка | Поведение без сети/кэша |
+|---|---|---|
+| STT | `WHISPER_DEVICE=cpu\|cuda\|auto` (дефолт `auto` → CUDA при наличии, иначе CPU) | Скачивание через `make models` обязательно; без кэша whisper не стартует |
+| TTS | порядок в `app/tts.py`: артефакт → `torch.hub` → `source='local'` | Без артефакта основной путь недоступен; фолбэк `source='local'` требует репозитория `snakers4/silero-models` |
 
 ## Состояние репозитория (каркас, T128)
 
