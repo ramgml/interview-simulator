@@ -1,0 +1,35 @@
+[project]
+name = "interview-simulator-backend"
+version = "0.1.0"
+description = "Interview simulator backend: FastAPI + SQLAlchemy + Whisper/TTS/MLflow"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "openai>=1.40",
+    "mlflow>=2.16",
+    "faster-whisper>=1.0",
+    "torch>=2.4",
+    "soundfile>=0.12",
+    "av>=12.0",
+    "sqlalchemy>=2.0",
+    "pydantic-settings>=2.4",
+    "python-multipart>=0.0.9",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "ruff>=0.6",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

@@ -33,6 +33,38 @@ make mlflow-ui   # MLflow UI: http://localhost:5100
 
 Голосовой цикл работает полностью локально: faster-whisper (STT) и Silero (TTS). Целевая машина — RTX 3070 Ti 8 ГБ (whisper: CUDA `int8_float16`). Микрофон не обязателен: если его нет, вопросы приходят текстом, а отвечать можно текстом — текстовый fallback является частью продукта, а не обходным путём.
 
+### TTS: Silero (T135)
+
+- `POST /api/tts` `{"text": "...", "voice": "kseniya"}` → `audio/wav` (24 кГц, mono). Голоса: `aidar/baya/kseniya/xenia/eugene/random`; смена голоса — без рестарта (модель — singleton).
+- Текст длиннее 300 символов режется по предложениям (сверхдлинные предложения — ещё и по словам, каждая часть ≤300 символов) и склеивается в один непрерывный wav.
+- Модель строго CPU (VRAM не занимает). Артефакт `v4_ru.pt` (~40 МБ, models.silero.ai) кладётся в `~/.cache/torch/hub/silero/`; скачивание входит в `make models` (консолидация T141). Отдельный прогрев при необходимости: `cd backend && uv run python -m app.download_silero`.
+- Порядок загрузки в `app/tts.py`: артефакт `v4_ru.pt` → `torch.hub.load('snakers4/silero-models', ...)` → `source='local'`. Фолбэк W200: torch.hub-путь требует `omegaconf` (в зависимостях проекта нет) и доступности репозитория `snakers4/silero-models` на Hugging Face (сейчас отдаёт 404) — поэтому основной путь в этом окружении артефактный.
+
+### Голосовые модели: make models (T141)
+
+`make models` скачивает обе модели одним прогоном (шаги whisper → silero, каждый идемпотентен: повтор — «already cached»):
+
+| Шаг | Модель | Размер | Кэш |
+|---|---|---|---|
+| STT | faster-whisper large-v3-turbo (ct2) | ~1.6 ГБ | `~/.cache/huggingface` |
+| TTS | silero `v4_ru.pt` | ~40 МБ | `~/.cache/torch/hub/silero/` |
+
+Офлайн-фолбэки при первом старте без сети:
+
+| Компонент | Настройка | Поведение без сети/кэша |
+|---|---|---|
+| STT | `WHISPER_DEVICE=cpu\|cuda\|auto` (дефолт `auto` → CUDA при наличии, иначе CPU) | Скачивание через `make models` обязательно; без кэша whisper не стартует |
+| TTS | порядок в `app/tts.py`: артефакт → `torch.hub` → `source='local'` | Без артефакта основной путь недоступен; фолбэк `source='local'` требует репозитория `snakers4/silero-models` |
+
+## База данных: SQLite WAL (T155)
+
+`app.db` работает в WAL-режиме (`PRAGMA journal_mode=WAL`, ставится автоматически на
+каждом соединении в `backend/app/db.py`) — LLM-вызов во время `/answer` больше не держит
+write-лок: параллельные записи (`PUT /api/settings`, второй `/answer`) не падают
+`database is locked`. `data/mlflow.db` отдельный файл: чтобы перевести его на WAL,
+выполните разово `sqlite3 data/mlflow.db "PRAGMA journal_mode=WAL;"` (режим персистентен
+на файле).
+
 ## Состояние репозитория (каркас, T128)
 
 Директорий `backend/` и `frontend/` ещё нет — они появятся в следующих задачах (T129+). Поэтому make-цели `setup`, `models`, `backend`, `frontend`, `dev`, `test`, `lint` сейчас завершаются ошибкой с пояснением (ненулевой код выхода — ожидаемое поведение).

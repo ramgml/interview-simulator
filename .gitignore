@@ -1,4 +1,5 @@
 data/
+mlruns/
 .venv/
 node_modules/
 .next/
