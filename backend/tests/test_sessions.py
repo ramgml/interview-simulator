@@ -692,6 +692,102 @@ def test_cancelled_session_has_no_report(client, plan_client):
     assert client.get(f"/api/sessions/{sid}/report").status_code == 404
 
 
+# --- гонка cancel vs завершившийся LLM-ход (T162) ---------------------------------------
+
+
+def _cancel_mid_llm(monkeypatch, phase: str, sid: str):
+    """Стаб json_chat: детерминированная гонка — чужое соединение коммитит cancel-эффект
+
+    (status=completed, error=«Отменено пользователем», completed_at) ВНУТРИ LLM-вызова:
+    прямой UPDATE в ту же tmp-БД = точный эквивалент параллельного POST /cancel.
+    phase: "plan" — эффект в PLAN-вызове (start), "turn" — в TURN-вызове (answer).
+    """
+    import app.db as db_mod
+
+    def stub(client, model, messages, *, temperature, max_tokens):
+        is_plan = "rounds" not in messages[1]["content"]
+        if (phase == "plan") == is_plan:
+            db = db_mod.SessionFactory()
+            row = db.get(Session, sid)
+            row.status = "completed"
+            row.error = "Отменено пользователем"
+            row.completed_at = row.started_at
+            db.commit()
+            db.close()
+        if is_plan:
+            return PLAN
+        return {"action": "finish", "text": "Спасибо за интервью", "covered_topic": None}
+
+    monkeypatch.setattr(interviewer, "json_chat", stub)
+
+
+def test_start_cancel_during_plan_keeps_completed(client, plan_client, monkeypatch):
+    """cancel во время PLAN → start не оживляет сессию: status=completed, started_at null."""
+    sid = _create(client)
+    _cancel_mid_llm(monkeypatch, "plan", sid)
+    resp = client.post(f"/api/sessions/{sid}/start")
+    assert resp.status_code == 200
+    state = client.get(f"/api/sessions/{sid}").json()
+    assert state["status"] == "completed"
+    assert state["started_at"] is None
+    assert state["error"] == "Отменено пользователем"
+
+
+def test_answer_cancel_during_turn_keeps_completed_and_keeps_interviewer_turn(
+    client, plan_client, monkeypatch
+):
+    """cancel во время TURN (не-done) → статус не перезаписывается; interviewer-ход есть."""
+    sid = _create(client)
+    _cancel_mid_llm(monkeypatch, "turn", sid)  # TURN-стаб вернёт finish → done-ветка покрыта
+    _start(client, sid)
+    resp = client.post(f"/api/sessions/{sid}/answer", json={"text": "ответ кандидата"})
+    assert resp.status_code == 200
+    state = client.get(f"/api/sessions/{sid}").json()
+    assert state["status"] == "completed"
+    assert state["error"] == "Отменено пользователем"
+    roles = [t["role"] for t in state["turns"]]
+    assert roles == ["interviewer", "candidate", "interviewer"]
+
+
+def test_answer_cancel_during_turn_no_double_final(client, plan_client, monkeypatch):
+    """cancel во время TURN (done) → report_json/score не пишутся поверх отмены."""
+    sid = _create(client)
+    _cancel_mid_llm(monkeypatch, "turn", sid)
+    _start(client, sid)
+    resp = client.post(f"/api/sessions/{sid}/answer", json={"text": "ответ кандидата"})
+    assert resp.status_code == 200
+    saved = _stored_session(sid)
+    assert saved.status == "completed"
+    assert saved.error == "Отменено пользователем"
+    assert saved.report_json is None
+    assert saved.overall_score is None
+    assert saved.mlflow_run_id is None
+
+
+def test_fail_after_cancel_keeps_completed(client, plan_client, monkeypatch):
+    """InterviewError после чужого cancel → failed не перезаписывает completed/error."""
+    sid = _create(client)
+
+    def cancel_then_boom(client, model, messages, *, temperature, max_tokens):
+        import app.db as db_mod
+
+        db = db_mod.SessionFactory()
+        row = db.get(Session, sid)
+        row.status = "completed"
+        row.error = "Отменено пользователем"
+        row.completed_at = row.created_at
+        db.commit()
+        db.close()
+        raise InterviewError("Сервис LLM недоступен")
+
+    monkeypatch.setattr(interviewer, "json_chat", cancel_then_boom)
+    resp = client.post(f"/api/sessions/{sid}/start")
+    assert resp.status_code == 502
+    saved = _stored_session(sid)
+    assert saved.status == "completed"
+    assert saved.error == "Отменено пользователем"
+
+
 # --- ленивое автозакрытие осиротевших in_progress (T158) --------------------------------
 
 
