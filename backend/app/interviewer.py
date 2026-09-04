@@ -6,6 +6,7 @@ from string import Template
 
 from openai import OpenAI
 
+from app.config import settings as env
 from app.errors import InterviewError
 from app.llm import json_chat
 from app.models import Session
@@ -63,8 +64,7 @@ def build_plan(client: OpenAI, session: Session, model: str) -> dict:
         {"role": "system", "content": system},
         {"role": "user", "content": session.vacancy_text[:VACANCY_MAX_CHARS]},
     ]
-    return json_chat(client, model, messages, temperature=0.2, max_tokens=4000)
-
+    return json_chat(client, model, messages, temperature=0.2, max_tokens=env.plan_max_tokens)
 
 def first_question(plan: dict) -> str | None:
     """Первый вопрос плана (порядок раундов) или None, если план без вопросов."""
@@ -108,7 +108,7 @@ def conduct_turn(
         },
     ]
     try:
-        return json_chat(client, model, messages, temperature=0.2, max_tokens=1000)
+        return json_chat(client, model, messages, temperature=0.2, max_tokens=env.turn_max_tokens)
     except InterviewError:
         logger.warning("conduct_turn fallback for session %s", session.id)
         question = _unasked_question(_plan(session), transcript_turns)

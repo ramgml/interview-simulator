@@ -6,6 +6,7 @@ import logging
 from openai import OpenAI
 from sqlalchemy import select
 
+from app.config import settings as env
 from app import interviewer
 from app.db import SessionFactory
 from app.errors import InterviewError
@@ -78,7 +79,7 @@ def evaluate(client: OpenAI, session: Session, model: str) -> dict:
         },
     ]
     try:
-        return json_chat(client, model, messages, temperature=0.2, max_tokens=4000)
+        return json_chat(client, model, messages, temperature=0.2, max_tokens=env.eval_max_tokens)
     except InterviewError:
         logger.warning("evaluate degraded fallback for session %s", session.id)
         return degraded_report()

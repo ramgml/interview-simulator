@@ -24,6 +24,13 @@ class Settings(BaseSettings):
     cloud_llm_api_key: str = ""
     cloud_llm_model: str = ""
 
+    # LLM: бюджеты генерации PLAN/TURN/EVAL (max_tokens). На reasoning-моделях (напр.
+    # glm-5.3-flash на Zhipu) reasoning тоже расходует этот бюджет — поднимай, если JSON
+    # приходит пустым/обрезанным (finish_reason=length).
+    plan_max_tokens: int = 4000
+    turn_max_tokens: int = 1000
+    eval_max_tokens: int = 4000
+
     # Трейсинг
     mlflow_tracking_uri: str = "sqlite:///data/mlflow.db"
 
