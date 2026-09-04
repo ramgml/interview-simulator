@@ -42,5 +42,9 @@ class Settings(BaseSettings):
     # БД
     database_url: str = "sqlite:///data/app.db"
 
+    # Ленивое автозакрытие осиротевших in_progress-сессий при GET /api/sessions (T158):
+    # последний ход старше N часов → сессия закрывается как отменённая; N <= 0 — выключено.
+    orphan_close_hours: int = 12
+
 
 settings = Settings()

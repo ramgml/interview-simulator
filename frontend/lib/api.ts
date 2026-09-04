@@ -115,6 +115,10 @@ export function finishSession(id: string): Promise<SessionState> {
   return request(`/api/sessions/${id}/finish`, { method: "POST" });
 }
 
+export function cancelSession(id: string): Promise<SessionState> {
+  return request(`/api/sessions/${id}/cancel`, { method: "POST" });
+}
+
 export function listSessions(): Promise<SessionBrief[]> {
   return request("/api/sessions");
 }

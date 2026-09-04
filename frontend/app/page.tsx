@@ -33,7 +33,24 @@ import {
 } from "@/components/ui/table";
 import { toast } from "sonner";
 import ProgressView from "@/components/ProgressView";
-import { createSession, startSession, listSessions, ApiError, type SessionBrief } from "@/lib/api";
+import {
+  cancelSession,
+  createSession,
+  startSession,
+  listSessions,
+  ApiError,
+  type SessionBrief,
+} from "@/lib/api";
+import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
 
 const SENIORITY_LABELS: Record<string, string> = {
   junior: "Junior",
@@ -65,6 +82,8 @@ export default function HomePage() {
   const [plannedQuestions, setPlannedQuestions] = useState("8");
   const [creating, setCreating] = useState(false);
   const [sessions, setSessions] = useState<SessionBrief[] | null>(null);
+  const [cancelId, setCancelId] = useState<string | null>(null);
+  const [canceling, setCanceling] = useState(false);
 
   const refreshSessions = useCallback(() => {
     listSessions()
@@ -92,6 +111,20 @@ export default function HomePage() {
     } catch (exc) {
       setCreating(false);
       toast.error(exc instanceof ApiError ? exc.message : "Не удалось создать сессию");
+    }
+  }
+
+  async function handleCancelRow() {
+    if (!cancelId || canceling) return;
+    setCanceling(true);
+    try {
+      await cancelSession(cancelId);
+      setCancelId(null);
+      refreshSessions();
+    } catch (exc) {
+      toast.error(exc instanceof ApiError ? exc.message : "Не удалось прервать сессию");
+    } finally {
+      setCanceling(false);
     }
   }
 
@@ -216,10 +249,42 @@ export default function HomePage() {
                         {session.overall_score ?? "—"}
                       </TableCell>
                       <TableCell className="text-right">
-                        {session.status === "completed" && (
+                        {session.status === "completed" && session.overall_score !== null && (
                           <Button variant="link" className="h-auto p-0" asChild>
                             <a href={`/session/${session.id}/report`}>Отчёт</a>
                           </Button>
+                        )}
+                        {session.status === "in_progress" && (
+                          <Dialog
+                            open={cancelId === session.id}
+                            onOpenChange={(open) => !open && setCancelId(null)}
+                          >
+                            <DialogTrigger asChild onClick={() => setCancelId(session.id)}>
+                              <Button variant="link" className="h-auto p-0">
+                                Прервать
+                              </Button>
+                            </DialogTrigger>
+                            <DialogContent>
+                              <DialogHeader>
+                                <DialogTitle>Прервать интервью?</DialogTitle>
+                                <DialogDescription>
+                                  Сессия будет завершена без оценки и отчёта. Продолжить нельзя.
+                                </DialogDescription>
+                              </DialogHeader>
+                              <DialogFooter>
+                                <DialogClose asChild>
+                                  <Button variant="outline">Продолжить интервью</Button>
+                                </DialogClose>
+                                <Button
+                                  variant="destructive"
+                                  disabled={canceling}
+                                  onClick={() => void handleCancelRow()}
+                                >
+                                  {canceling ? "Прерываем…" : "Прервать"}
+                                </Button>
+                              </DialogFooter>
+                            </DialogContent>
+                          </Dialog>
                         )}
                       </TableCell>
                     </TableRow>

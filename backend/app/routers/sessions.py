@@ -3,12 +3,13 @@
 import asyncio
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from sqlalchemy import select
 from sqlalchemy.orm import Session as DbSession
 from app import evaluator, interviewer, llm, stt, tracing
+from app.config import settings as env
 from app.db import get_db
 from app.errors import EmptyTranscript, InterviewError
 from app.interviewer import MAX_TURNS
@@ -154,9 +155,21 @@ def finish_session(session_id: str, db: DbSession = Depends(get_db)) -> dict:
     return _session_state(db, session)
 
 
+@router.post("/api/sessions/{session_id}/cancel")
+def cancel_session(session_id: str, db: DbSession = Depends(get_db)) -> dict:
+    """Отмена без оценки: completed + error «Отменено пользователем»; evaluate/MLflow не зовём."""
+    session = _get_session(db, session_id)
+    if session.status not in ("in_progress", "created"):
+        raise _http_error(409, f"Сессия не идёт (status={session.status})")
+    session.error = "Отменено пользователем"
+    _complete(db, session)
+    return _session_state(db, session)
+
+
 @router.get("/api/sessions")
 def list_sessions(db: DbSession = Depends(get_db)) -> list[dict]:
-    """История: список сессий (без turns)."""
+    """История: список сессий (без turns); перед выдачей — ленивое автозакрытие осиротевших."""
+    _close_orphans(db)
     rows = db.execute(select(Session).order_by(Session.created_at.desc())).scalars().all()
     return [_session_brief(row) for row in rows]
 
@@ -287,6 +300,33 @@ def _complete(db: DbSession, session: Session) -> None:
             started = started.replace(tzinfo=timezone.utc)
         session.duration_sec = (completed - started).total_seconds()
     db.commit()
+
+
+def _close_orphans(db: DbSession) -> None:
+    """Ленивое автозакрытие: in_progress без ходов дольше orphan_close_hours → отменена (T158).
+
+    Последний ход — максимум turns.created_at; без ходов — started_at (нет — created_at).
+    Выключается orphan_close_hours <= 0.
+    """
+    if env.orphan_close_hours <= 0:
+        return
+    threshold = utcnow() - timedelta(hours=env.orphan_close_hours)
+    orphans = db.execute(
+        select(Session).where(Session.status == "in_progress")
+    ).scalars().all()
+    for session in orphans:
+        last_turn_at = db.execute(
+            select(Turn.created_at)
+            .where(Turn.session_id == session.id)
+            .order_by(Turn.created_at.desc())
+            .limit(1)
+        ).scalar()
+        last_activity = last_turn_at or session.started_at or session.created_at
+        if last_activity.tzinfo is None:
+            last_activity = last_activity.replace(tzinfo=timezone.utc)
+        if last_activity < threshold:
+            session.error = "Отменено пользователем"
+            _complete(db, session)
 
 
 def _finalize_session(db: DbSession, session: Session) -> None:

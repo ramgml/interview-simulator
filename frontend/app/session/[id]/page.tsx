@@ -25,6 +25,7 @@ import {
 import AudioQueue from "@/components/AudioQueue";
 import Recorder from "@/components/Recorder";
 import {
+  cancelSession,
   finishSession,
   getSession,
   startSession,
@@ -41,6 +42,7 @@ export default function SessionPage() {
   const [error, setError] = useState<string | null>(null);
   const [speaking, setSpeaking] = useState(true);
   const [finishing, setFinishing] = useState(false);
+  const [canceling, setCanceling] = useState(false);
   const startedRef = useRef(false);
 
   const goToReport = useCallback(() => {
@@ -91,6 +93,17 @@ export default function SessionPage() {
     }
   }
 
+  async function handleCancel() {
+    setCanceling(true);
+    try {
+      await cancelSession(id);
+      router.push("/");
+    } catch (exc) {
+      setCanceling(false);
+      setError(exc instanceof ApiError ? exc.message : "Не удалось прервать сессию");
+    }
+  }
+
   if (error) {
     return (
       <main className="mx-auto w-full max-w-3xl flex-1 px-4 py-8 flex flex-col gap-4">
@@ -122,27 +135,60 @@ export default function SessionPage() {
             {session.planned_questions}
           </p>
         </div>
-        <Dialog>
-          <DialogTrigger asChild>
-            <Button variant="outline">Завершить досрочно</Button>
-          </DialogTrigger>
-          <DialogContent>
-            <DialogHeader>
-              <DialogTitle>Завершить интервью?</DialogTitle>
-              <DialogDescription>
-                Будет сформирован отчёт по уже заданным вопросам. Продолжить нельзя.
-              </DialogDescription>
-            </DialogHeader>
-            <DialogFooter>
-              <DialogClose asChild>
-                <Button variant="outline">Продолжить интервью</Button>
-              </DialogClose>
-              <Button variant="destructive" disabled={finishing} onClick={() => void handleFinish()}>
-                {finishing ? "Готовим отчёт…" : "Завершить"}
-              </Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
+        <div className="flex items-center gap-2">
+          <Dialog>
+            <DialogTrigger asChild>
+              <Button variant="outline">Завершить досрочно</Button>
+            </DialogTrigger>
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>Завершить интервью?</DialogTitle>
+                <DialogDescription>
+                  Будет сформирован отчёт по уже заданным вопросам. Продолжить нельзя.
+                </DialogDescription>
+              </DialogHeader>
+              <DialogFooter>
+                <DialogClose asChild>
+                  <Button variant="outline">Продолжить интервью</Button>
+                </DialogClose>
+                <Button
+                  variant="destructive"
+                  disabled={finishing}
+                  onClick={() => void handleFinish()}
+                >
+                  {finishing ? "Готовим отчёт…" : "Завершить"}
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
+          {session.status === "in_progress" && (
+            <Dialog>
+              <DialogTrigger asChild>
+                <Button variant="destructive">Прервать</Button>
+              </DialogTrigger>
+              <DialogContent>
+                <DialogHeader>
+                  <DialogTitle>Прервать интервью?</DialogTitle>
+                  <DialogDescription>
+                    Сессия будет завершена без оценки и отчёта. Продолжить нельзя.
+                  </DialogDescription>
+                </DialogHeader>
+                <DialogFooter>
+                  <DialogClose asChild>
+                    <Button variant="outline">Продолжить интервью</Button>
+                  </DialogClose>
+                  <Button
+                    variant="destructive"
+                    disabled={canceling}
+                    onClick={() => void handleCancel()}
+                  >
+                    {canceling ? "Прерываем…" : "Прервать"}
+                  </Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
+          )}
+        </div>
       </div>
 
       <div className="flex flex-col gap-3">
