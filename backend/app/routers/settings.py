@@ -28,7 +28,7 @@ API_KEY_MASK = "***"
 
 @router.get("")
 def read_settings(db: DbSession = Depends(get_db)) -> SettingsRead:
-    row = _get_row(db)
+    row = get_settings_row(db)
     return SettingsRead(
         provider=row.provider,
         base_url=row.base_url,
@@ -42,7 +42,7 @@ def read_settings(db: DbSession = Depends(get_db)) -> SettingsRead:
 
 @router.put("")
 def update_settings(payload: SettingsUpdate, db: DbSession = Depends(get_db)) -> SettingsRead:
-    row = _get_row(db)
+    row = get_settings_row(db)
     for name, value in payload.model_dump(exclude_unset=True).items():
         # '***' — маска с GET; пустой/'' — очистка без явного ключа; хранимый не меняем
         if name == "api_key" and (value == API_KEY_MASK or value == ""):
@@ -65,7 +65,7 @@ def update_settings(payload: SettingsUpdate, db: DbSession = Depends(get_db)) ->
 def test_settings(db: DbSession = Depends(get_db)) -> dict[str, object]:
     """GET /api/settings/test: local — лёгкий вызов client.models.list(); cloud — требует
     заполненные base_url/api_key/model (иначе 422 с внятным текстом); ошибка соединения → 502."""
-    row = _get_row(db)
+    row = get_settings_row(db)
     if row.provider == "cloud" and not (row.base_url and row.api_key and row.model):
         raise HTTPException(
             status_code=422,
@@ -84,7 +84,7 @@ def test_settings(db: DbSession = Depends(get_db)) -> dict[str, object]:
     return {"ok": True}
 
 
-def _get_row(db: DbSession) -> Settings:
+def get_settings_row(db: DbSession) -> Settings:
     row = db.execute(select(Settings).where(Settings.id == 1)).scalar_one_or_none()
     if row is None:
         init_db()
