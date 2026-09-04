@@ -206,6 +206,10 @@ export function testSettings(): Promise<{ ok: boolean }> {
   return request("/api/settings/test");
 }
 
+export function getModels(): Promise<{ models: string[] }> {
+  return request("/api/models");
+}
+
 export async function synthesizeSpeech(text: string, voice?: string): Promise<Blob> {
   const response = await fetch(`${API_BASE}/api/tts`, {
     method: "POST",
