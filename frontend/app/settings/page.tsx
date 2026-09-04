@@ -21,13 +21,19 @@ import {
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Separator } from "@/components/ui/separator";
 import { toast } from "sonner";
-import { getSettings, updateSettings, testSettings, ApiError } from "@/lib/api";
+import {
+  getSettings,
+  updateSettings,
+  testSettings,
+  getModels,
+  ApiError,
+} from "@/lib/api";
 
 const MODELS = ["glm/glm-5.3-flash", "glm/glm-5.3", "auto/best-coding"];
 const WHISPER_MODELS = ["large-v3-turbo", "large-v3", "medium", "small"];
 const TTS_VOICES = ["aidar", "baya", "kseniya", "xenia", "eugene", "random"];
 
-/** Настройки провайдера LLM и голоса: GET/PUT /api/settings + GET /api/settings/test. */
+/** Настройки провайдера LLM и голоса: GET/PUT /api/settings, GET /api/settings/test, GET /api/models. */
 export default function SettingsPage() {
   const [provider, setProvider] = useState<"local" | "cloud">("local");
   const [baseUrl, setBaseUrl] = useState("");
@@ -39,21 +45,38 @@ export default function SettingsPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
+  const [refreshingModels, setRefreshingModels] = useState(false);
+  const [providerModels, setProviderModels] = useState<string[] | null>(null);
 
   useEffect(() => {
+    let cancelled = false;
     getSettings()
       .then((settings) => {
+        if (cancelled) return;
         setProvider(settings.provider);
         setBaseUrl(settings.base_url);
         setModel(settings.model);
         setWhisperModel(settings.whisper_model);
         setTtsVoice(settings.tts_voice);
         setMaskedKey(settings.api_key !== null);
+        // Автозагрузка списка моделей провайдера; при ошибке — молча статический список.
+        if (
+          settings.provider === "cloud" &&
+          settings.base_url.trim() &&
+          settings.api_key !== null
+        ) {
+          getModels()
+            .then((resp) => !cancelled && setProviderModels(resp.models))
+            .catch(() => setProviderModels(null));
+        }
       })
       .catch((exc: unknown) =>
         toast.error(exc instanceof ApiError ? exc.message : "Не удалось загрузить настройки"),
       )
-      .finally(() => setLoading(false));
+      .finally(() => !cancelled && setLoading(false));
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   async function handleSave() {
@@ -77,6 +100,9 @@ export default function SettingsPage() {
       toast.error(exc instanceof ApiError ? exc.message : "Не удалось сохранить настройки");
     } finally {
       setSaving(false);
+      // Настройки применяются после «Сохранить» (как у «Проверить соединение») —
+      // список моделей провайдера обновляем так же; при ошибке — молча статика.
+      refreshProviderModels();
     }
   }
 
@@ -90,6 +116,26 @@ export default function SettingsPage() {
     } finally {
       setTesting(false);
     }
+  }
+
+  /** Тянет список моделей провайдера; при ошибке — молча фолбэк на статический список. */
+  function refreshProviderModels() {
+    if (provider !== "cloud" || !baseUrl.trim() || !maskedKey) return;
+    getModels()
+      .then((resp) => setProviderModels(resp.models))
+      .catch(() => setProviderModels(null));
+  }
+
+  /** Ручное обновление кнопкой: ошибка — toast и фолбэк на статику. */
+  function handleRefreshModels() {
+    setRefreshingModels(true);
+    getModels()
+      .then((resp) => setProviderModels(resp.models))
+      .catch(() => {
+        setProviderModels(null);
+        toast.error("Не удалось получить список моделей провайдера");
+      })
+      .finally(() => setRefreshingModels(false));
   }
 
   if (loading) {
@@ -158,7 +204,17 @@ export default function SettingsPage() {
           </div>
 
           <div className="flex flex-col gap-2">
-            <Label htmlFor="model">Модель</Label>
+            <div className="flex items-center justify-between">
+              <Label htmlFor="model">Модель</Label>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => void handleRefreshModels()}
+                disabled={refreshingModels}
+              >
+                {refreshingModels ? "Обновляем…" : "Обновить список"}
+              </Button>
+            </div>
             <Input
               id="model"
               list="model-options"
@@ -167,7 +223,7 @@ export default function SettingsPage() {
               onChange={(event) => setModel(event.target.value)}
             />
             <datalist id="model-options">
-              {MODELS.map((option) => (
+              {(providerModels ?? MODELS).map((option) => (
                 <option key={option} value={option} />
               ))}
             </datalist>
