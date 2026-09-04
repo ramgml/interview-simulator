@@ -2,9 +2,12 @@
 
 import json
 import logging
+from pathlib import Path
 
 import pytest
+from fastapi.testclient import TestClient
 
+from app import main as main_app_module
 from app import tracing
 from app.models import Session, Settings, Turn
 
@@ -154,7 +157,9 @@ def test_init_mlflow_makes_three_calls(fake_mlflow):
     assert len(fake_mlflow.autolog_calls) == 1  # mlflow.openai.autolog
     kinds = [name for name, _ in fake_mlflow.init_calls]
     assert kinds == ["set_tracking_uri", "set_experiment"]
-    assert fake_mlflow.init_calls[0][1] == tracing.env.mlflow_tracking_uri
+    assert fake_mlflow.init_calls[0][1] == tracing._repo_relative_sqlite_url(
+        tracing.env.mlflow_tracking_uri
+    )
     assert fake_mlflow.init_calls[1][1] == "interview-simulator"
     assert fake_mlflow.autolog_calls[0] == {"log_traces": True}
 
@@ -283,3 +288,68 @@ def test_log_session_run_db_unavailable_returns_none(fake_mlflow, monkeypatch):
     monkeypatch.setattr(tracing, "SessionFactory", boom)
     result = tracing.log_session_run(make_session(), [], {"competencies": []})
     assert result is None
+
+
+# --- repo-relative sqlite URI --------------------------------------------------
+
+
+def test_init_mlflow_anchors_relative_sqlite_uri_to_repo_root(fake_mlflow):
+    """Относительный sqlite-URI из env якорится к корню репо, а не к cwd процесса."""
+    tracing.init_mlflow()
+    repo_root = Path(__file__).resolve().parents[2]
+    expected = "sqlite:///" + str((repo_root / "data/mlflow.db").resolve())
+    assert fake_mlflow.init_calls[0] == ("set_tracking_uri", expected)
+    uri = fake_mlflow.init_calls[0][1]
+    assert uri.startswith("sqlite:////")  # абсолютный путь: 4 слэша
+    assert uri.endswith("/data/mlflow.db")
+
+
+def test_repo_relative_sqlite_url_absolute_and_non_sqlite_pass_through():
+    """Абсолютный sqlite-URI и не-sqlite URI проходят через хелпер без изменений."""
+    assert tracing._repo_relative_sqlite_url("sqlite:////tmp/x.db") == "sqlite:////tmp/x.db"
+    assert tracing._repo_relative_sqlite_url("http://host:5100") == "http://host:5100"
+
+
+# --- lifespan ------------------------------------------------------------------
+
+
+def test_lifespan_calls_init_db_then_init_mlflow(monkeypatch):
+    """Порядок старта: init_db, затем init_mlflow."""
+    calls: list[str] = []
+    monkeypatch.setattr(main_app_module, "init_db", lambda: calls.append("init_db"))
+    monkeypatch.setattr(main_app_module, "init_mlflow", lambda: calls.append("init_mlflow"))
+    with TestClient(main_app_module.app):
+        pass
+    assert calls == ["init_db", "init_mlflow"]
+
+
+def test_lifespan_runs_real_init_mlflow_with_stub_mlflow(monkeypatch):
+    """Lifespan реально вызывает init_mlflow: якоренный URI + autolog(log_traces=True)."""
+    class StubOpenai:
+        def __init__(self):
+            self.autolog_calls: list[dict] = []
+
+        def autolog(self, **kwargs):
+            self.autolog_calls.append(kwargs)
+
+    class StubMlflow:
+        def __init__(self):
+            self.init_calls: list[tuple] = []
+
+        def set_tracking_uri(self, uri):
+            self.init_calls.append(("set_tracking_uri", uri))
+
+        def set_experiment(self, name):
+            self.init_calls.append(("set_experiment", name))
+
+    stub = StubMlflow()
+    stub.openai = StubOpenai()
+    stub.autolog_calls = stub.openai.autolog_calls
+    monkeypatch.setattr(tracing, "mlflow", stub)
+    monkeypatch.setattr(tracing, "mlflow_openai", stub.openai)
+    with TestClient(main_app_module.app):
+        pass
+    repo_root = Path(__file__).resolve().parents[2]
+    expected = "sqlite:///" + str((repo_root / "data/mlflow.db").resolve())
+    assert ("set_tracking_uri", expected) in stub.init_calls
+    assert stub.autolog_calls == [{"log_traces": True}]
