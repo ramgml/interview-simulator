@@ -72,6 +72,7 @@ def chat(
         )
     return content, usage
 
+
 def _strip_json_fences(text: str) -> str:
     """Срез markdown-заборов ```json … ``` / ``` …; голый JSON проходит как есть."""
     stripped = text.strip()

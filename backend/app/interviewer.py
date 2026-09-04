@@ -66,6 +66,7 @@ def build_plan(client: OpenAI, session: Session, model: str) -> dict:
     ]
     return json_chat(client, model, messages, temperature=0.2, max_tokens=env.plan_max_tokens)
 
+
 def first_question(plan: dict) -> str | None:
     """Первый вопрос плана (порядок раундов) или None, если план без вопросов."""
     for round_ in plan.get("rounds", []):

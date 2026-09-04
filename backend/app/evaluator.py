@@ -6,8 +6,8 @@ import logging
 from openai import OpenAI
 from sqlalchemy import select
 
-from app.config import settings as env
 from app import interviewer
+from app.config import settings as env
 from app.db import SessionFactory
 from app.errors import InterviewError
 from app.llm import json_chat
