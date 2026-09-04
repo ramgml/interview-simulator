@@ -249,7 +249,7 @@ export default function HomePage() {
                         {session.overall_score ?? "—"}
                       </TableCell>
                       <TableCell className="text-right">
-                        {session.status === "completed" && session.overall_score !== null && (
+                        {session.status === "completed" && !session.error && (
                           <Button variant="link" className="h-auto p-0" asChild>
                             <a href={`/session/${session.id}/report`}>Отчёт</a>
                           </Button>

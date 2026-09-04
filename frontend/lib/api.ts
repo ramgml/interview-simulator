@@ -54,6 +54,7 @@ export interface SessionBrief {
   style: string;
   planned_questions: number;
   overall_score: number | null;
+  error: string | null;
 }
 
 export interface Turn {

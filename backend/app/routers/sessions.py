@@ -383,6 +383,7 @@ def _session_brief(session: Session) -> dict:
         "style": session.style,
         "planned_questions": session.planned_questions,
         "overall_score": session.overall_score,
+        "error": session.error,
     }
 
 

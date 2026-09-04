@@ -730,6 +730,7 @@ def test_list_sessions_closes_stale_in_progress(client, plan_client):
     rows = client.get("/api/sessions").json()
     row = next(r for r in rows if r["id"] == sid)
     assert row["status"] == "completed"
+    assert row["error"] == "Отменено пользователем"
     saved = _stored_session(sid)
     assert saved.error == "Отменено пользователем"
     assert saved.report_json is None
