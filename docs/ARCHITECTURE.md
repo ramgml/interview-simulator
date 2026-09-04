@@ -90,7 +90,8 @@ Fallback при двойной ошибке JSON: `{"degraded": true, "verdict":
 | `POST /api/sessions/{id}/start` | build_plan + первый вопрос; status=in_progress |
 | `POST /api/sessions/{id}/answer` | multipart `audio` ИЛИ json `{text}`; → `{transcript, question_text|null, done, action}`; пустой STT → 422 «Речь не распознана» (LLM не дёргаем); авто-fin при 24 ходах |
 | `POST /api/sessions/{id}/finish` | досрочный финал |
-| `GET /api/sessions` · `GET /api/sessions/{id}` · `GET /api/sessions/{id}/report` | история / состояние+turns / отчёт |
+| `POST /api/sessions/{id}/cancel` | отмена без оценки (evaluate/MLflow не вызываются): status=completed, `error`="Отменено пользователем", без report/балла; для `in_progress`/`created`, иначе 409 |
+| `GET /api/sessions` · `GET /api/sessions/{id}` · `GET /api/sessions/{id}/report` | история (перед выдачей — ленивое автозакрытие: осиротевшие `in_progress` без ходов дольше `orphan_close_hours` (12, env `ORPHAN_CLOSE_HOURS`, `<=0` — выключено) закрываются как отменённые) / состояние+turns / отчёт |
 | `GET /api/progress` | SQL-агрегация completed-сессий: `{date, position_title, overall_score}`, средние по компетенциям, тренд |
 | `GET/PUT /api/settings` · `GET /api/settings/test` | настройки; api_key наружу маскируется `***`; test — проверка соединения |
 | `GET /api/models` | список id моделей провайдера: `{"models": [str]}` — GET `{base_url}/models` (OpenAI-совместимый) через клиент настроек; провайдер cloud без base_url/api_key → 422; ошибка соединения/таймаут → 502 |
@@ -103,10 +104,10 @@ Fallback при двойной ошибке JSON: `{"degraded": true, "verdict":
 ## Frontend (shadcn/ui)
 
 - shadcn-компоненты: button card input textarea label select radio-group tabs badge progress separator sonner dialog.
-- `app/page.tsx`: форма новой сессии (Card): Textarea вакансии (обяз.), Select грейд (junior/middle/senior/lead), Select язык (ru/en), RadioGroup стиля, Select числа вопросов (5/8/12); Tabs «История» (таблица: дата, позиция, Badge статуса, скор, → отчёт) и «Прогресс» (`ProgressView`).
+- `app/page.tsx`: форма новой сессии (Card): Textarea вакансии (обяз.), Select грейд (junior/middle/senior/lead), Select язык (ru/en), RadioGroup стиля, Select числа вопросов (5/8/12); Tabs «История» (таблица: дата, позиция, Badge статуса, скор, → отчёт (только completed с баллом), «Прервать» для in_progress (Dialog) → cancel) и «Прогресс» (`ProgressView`).
 - `components/Recorder.tsx`: hold-to-talk (pointerdown/up), `getUserMedia` + `MediaRecorder('audio/webm;codecs=opus')` → Blob → POST /answer; красный индикатор+таймер; fallback Textarea «Ответить текстом»; disabled во время озвучки.
 - `components/AudioQueue.tsx`: разбиение на предложения (`[.!?…]\s`), последовательный `POST /api/tts` → ObjectURL → очередь `<audio>`; текст вопроса показывается сразу, не ждёт озвучки.
-- `app/session/[id]/page.tsx`: лента переписки (Card на ход), Recorder, «Завершить досрочно» (Dialog-подтверждение) → отчёт; при done — авто-переход.
+- `app/session/[id]/page.tsx`: лента переписки (Card на ход), Recorder, «Завершить досрочно» (Dialog-подтверждение) → отчёт; «Прервать» (Dialog) → cancel → главная; при done — авто-переход.
 - `app/settings/page.tsx`: RadioGroup провайдер (local/cloud), base_url, api_key (password), model (datalist, «Обновить список» моделей провайдера с фолбэком на статический список), whisper_model, tts_voice; «Проверить соединение» → sonner-toast.
 - `app/session/[id]/report/page.tsx` + `ReportView.tsx`: общий балл (Progress крупно), компетенции (Card с Progress и комментарием), turn_feedback (Accordion: вопрос→ответ→что хорошо/упущено/сильный ответ), сильные/слабые (две колонки Badge), план подготовки (таблица тема→действие), вердикт + hire_recommendation-бейдж; degraded → Alert.
 - Тема — системная; переключатель не делаем (next-themes — оверинжиниринг для MVP). Без AI-SDK — прямой fetch (`lib/api.ts`).
