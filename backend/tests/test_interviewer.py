@@ -15,6 +15,8 @@ from app.interviewer import (
     first_question,
 )
 
+from app.config import settings as env
+
 
 class FakeCompletions:
     """Стаб client.chat.completions: помнит вызовы, отдаёт заготовленный ответ."""
@@ -56,8 +58,19 @@ class FakeFailingClient:
 
 
 class FakeResponse:
-    def __init__(self, content: str):
-        self.choices = [type("C", (), {"message": type("M", (), {"content": content})()})()]
+    """Стаб ответа create(): content + finish_reason (usage=None)."""
+
+    def __init__(self, content: str, finish_reason: str | None = "stop"):
+        self.choices = [
+            type(
+                "C",
+                (),
+                {
+                    "message": type("M", (), {"content": content})(),
+                    "finish_reason": finish_reason,
+                },
+            )()
+        ]
         self.usage = None
 
 
@@ -249,3 +262,22 @@ def test_first_question_returns_first_of_first_round():
 
 def test_first_question_empty_plan_returns_none():
     assert first_question({}) is None
+
+
+# --- max_tokens из Settings (T157) -----------------------------------------------
+
+
+def test_build_plan_max_tokens_from_settings(monkeypatch):
+    """PLAN берёт max_tokens из Settings (T157)."""
+    monkeypatch.setattr(env, "plan_max_tokens", 12345)
+    client = FakeClient(FakeResponse(PLAN_JSON))
+    build_plan(client, make_session(), model="test-model")
+    assert client.calls[0]["max_tokens"] == 12345
+
+
+def test_conduct_turn_max_tokens_from_settings(monkeypatch):
+    """TURN берёт max_tokens из Settings (T157)."""
+    monkeypatch.setattr(env, "turn_max_tokens", 7)
+    client = FakeClient(FakeResponse(TURN_NEXT))
+    conduct_turn(client, make_session(plan_json=PLAN_JSON), [], model="test-model")
+    assert client.calls[0]["max_tokens"] == 7
