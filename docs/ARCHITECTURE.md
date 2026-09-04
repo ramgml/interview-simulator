@@ -23,7 +23,7 @@ interview-simulator/            (monorepo, main → origin)
 │       ├── evaluator.py        промпт EVAL, финальный отчёт (скоринг+разбор+план)
 │       ├── tracing.py          mlflow init, autolog, session run (метрики+артефакты)
 │       ├── errors.py           InterviewError, EmptyTranscript
-│       └── routers/{sessions,settings,audio}.py
+│       └── routers/{models,sessions,settings,audio}.py
 ├── frontend/                   Next.js 16 (TS, Tailwind v4, app router, npm)
 │   ├── components/ui/*         shadcn-компоненты (npx shadcn@latest add ...)
 │   ├── components/{Recorder,AudioQueue,ReportView,ProgressView}.tsx
@@ -93,6 +93,7 @@ Fallback при двойной ошибке JSON: `{"degraded": true, "verdict":
 | `GET /api/sessions` · `GET /api/sessions/{id}` · `GET /api/sessions/{id}/report` | история / состояние+turns / отчёт |
 | `GET /api/progress` | SQL-агрегация completed-сессий: `{date, position_title, overall_score}`, средние по компетенциям, тренд |
 | `GET/PUT /api/settings` · `GET /api/settings/test` | настройки; api_key наружу маскируется `***`; test — проверка соединения |
+| `GET /api/models` | список id моделей провайдера: `{"models": [str]}` — GET `{base_url}/models` (OpenAI-совместимый) через клиент настроек; провайдер cloud без base_url/api_key → 422; ошибка соединения/таймаут → 502 |
 | `POST /api/tts` `{text}` | → `audio/wav` |
 | `POST /api/stt` (multipart) | отладочный |
 | `POST /api/debug/chat` | отладочный |
@@ -106,8 +107,8 @@ Fallback при двойной ошибке JSON: `{"degraded": true, "verdict":
 - `components/Recorder.tsx`: hold-to-talk (pointerdown/up), `getUserMedia` + `MediaRecorder('audio/webm;codecs=opus')` → Blob → POST /answer; красный индикатор+таймер; fallback Textarea «Ответить текстом»; disabled во время озвучки.
 - `components/AudioQueue.tsx`: разбиение на предложения (`[.!?…]\s`), последовательный `POST /api/tts` → ObjectURL → очередь `<audio>`; текст вопроса показывается сразу, не ждёт озвучки.
 - `app/session/[id]/page.tsx`: лента переписки (Card на ход), Recorder, «Завершить досрочно» (Dialog-подтверждение) → отчёт; при done — авто-переход.
+- `app/settings/page.tsx`: RadioGroup провайдер (local/cloud), base_url, api_key (password), model (datalist, «Обновить список» моделей провайдера с фолбэком на статический список), whisper_model, tts_voice; «Проверить соединение» → sonner-toast.
 - `app/session/[id]/report/page.tsx` + `ReportView.tsx`: общий балл (Progress крупно), компетенции (Card с Progress и комментарием), turn_feedback (Accordion: вопрос→ответ→что хорошо/упущено/сильный ответ), сильные/слабые (две колонки Badge), план подготовки (таблица тема→действие), вердикт + hire_recommendation-бейдж; degraded → Alert.
-- `app/settings/page.tsx`: RadioGroup провайдер (local/cloud), base_url, api_key (password), model (datalist), whisper_model, tts_voice; «Проверить соединение» → sonner-toast.
 - Тема — системная; переключатель не делаем (next-themes — оверинжиниринг для MVP). Без AI-SDK — прямой fetch (`lib/api.ts`).
 
 ## Makefile
