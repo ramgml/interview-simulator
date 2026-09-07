@@ -1,6 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import Link from "next/link";
+import { Settings } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import {
@@ -130,7 +132,15 @@ export default function HomePage() {
 
   return (
     <main className="mx-auto w-full max-w-3xl flex-1 px-4 py-8 flex flex-col gap-8">
-      <h1 className="text-2xl font-semibold tracking-tight">Тренажёр собеседований</h1>
+      <div className="flex items-center justify-between gap-4">
+        <h1 className="text-2xl font-semibold tracking-tight">Тренажёр собеседований</h1>
+        <Button variant="outline" asChild>
+          <Link href="/settings" aria-label="Настройки">
+            <Settings className="size-4" />
+            Настройки
+          </Link>
+        </Button>
+      </div>
 
       <Card>
         <CardHeader>
