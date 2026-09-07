@@ -126,8 +126,8 @@ export default function SessionPage() {
   const lastInterviewer = [...session.turns].reverse().find((turn) => turn.role === "interviewer");
 
   return (
-    <main className="mx-auto w-full max-w-3xl flex-1 px-4 py-8 flex flex-col gap-6">
-      <div className="flex items-center justify-between gap-4">
+    <main className="mx-auto w-full max-w-3xl 2xl:max-w-screen-2xl flex-1 px-4 py-8 flex flex-col gap-6">
+      <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between xl:gap-6">
         <div className="flex flex-col gap-1">
           <h1 className="text-xl font-semibold tracking-tight">{session.position_title}</h1>
           <p className="text-sm text-muted-foreground">
@@ -135,7 +135,7 @@ export default function SessionPage() {
             {session.planned_questions}
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 xl:shrink-0 max-xl:pt-2">
           <Dialog>
             <DialogTrigger asChild>
               <Button variant="outline">Завершить досрочно</Button>
@@ -191,7 +191,7 @@ export default function SessionPage() {
         </div>
       </div>
 
-      <div className="flex flex-col gap-3">
+      <div className="flex flex-col gap-6 xl:grid xl:grid-cols-2 xl:items-start">
         {session.turns.map((turn) => {
           const isCurrentQuestion = lastInterviewer !== undefined && turn.idx === lastInterviewer.idx;
           return (
@@ -222,7 +222,7 @@ export default function SessionPage() {
         })}
       </div>
 
-      <Card>
+      <Card className="xl:sticky xl:top-8">
         <CardHeader className="py-3">
           <CardTitle className="text-sm">Ваш ход</CardTitle>
           <CardDescription>Нажмите «Говорить», чтобы записать ответ, или ответьте текстом</CardDescription>
