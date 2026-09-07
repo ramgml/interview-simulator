@@ -225,7 +225,7 @@ export default function SessionPage() {
       <Card>
         <CardHeader className="py-3">
           <CardTitle className="text-sm">Ваш ход</CardTitle>
-          <CardDescription>Говорите, удерживая кнопку, или ответьте текстом</CardDescription>
+          <CardDescription>Нажмите «Говорить», чтобы записать ответ, или ответьте текстом</CardDescription>
         </CardHeader>
         <CardContent className="pb-4">
           <Recorder sessionId={id} isSpeaking={speaking} onAnswered={handleAnswered} />
