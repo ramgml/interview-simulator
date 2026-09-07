@@ -42,6 +42,9 @@ export default function Recorder({
   const chunksRef = useRef<Blob[]>([]);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const startedAtRef = useRef(0);
+  // Защелка «старт уже идёт»: recording выставляется только после getUserMedia,
+  // без неё второй клик в этом окне запустит второй стрим/рекордер.
+  const startingRef = useRef(false);
 
   /** Остановка таймера и треков стрима из ref (образец — фикс T169 в настройках аудио). */
   function releaseStream() {
@@ -69,6 +72,8 @@ export default function Recorder({
   }, []);
 
   async function startRecording() {
+    if (startingRef.current) return;
+    startingRef.current = true;
     setError(null);
     let stream: MediaStream;
     try {
@@ -80,6 +85,7 @@ export default function Recorder({
       try {
         stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       } catch {
+        startingRef.current = false;
         setError("Микрофон недоступен. Ответьте текстом или проверьте доступ к микрофону.");
         return;
       }
@@ -105,6 +111,7 @@ export default function Recorder({
     };
     recorder.start();
     recorderRef.current = recorder;
+    startingRef.current = false;
     setSeconds(0);
     timerRef.current = setInterval(() => setSeconds((s) => s + 1), 1000);
     setRecording(true);
@@ -112,6 +119,7 @@ export default function Recorder({
 
   /** Повторный клик: стоп записи; финальный чанк и решение об отправке — в onstop. */
   function stopRecording() {
+    startingRef.current = false;
     setRecording(false);
     releaseStream();
     const recorder = recorderRef.current;
@@ -121,10 +129,12 @@ export default function Recorder({
 
   /**
    * Toggle-семантика: один onClick без pointer-событий. Старт асинхронный
-   * (getUserMedia), повторный клик возможен только при recording=true —
-   * двойного срабатывания нет: state-машина idle → recording → sending.
+   * (getUserMedia), поэтому повторный клик до готовности отсекается защёлкой
+   * startingRef (синхронно, до await): второй startRecording не запустится,
+   * двойного стрима нет. Машина состояний: idle → starting → recording → sending.
    */
   function handleRecordClick() {
+    if (startingRef.current) return; // старт ещё идёт — второй клик игнорируем
     if (recording) {
       stopRecording();
       return;
