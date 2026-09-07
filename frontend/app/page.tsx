@@ -222,7 +222,7 @@ export default function HomePage() {
         </CardContent>
       </Card>
 
-      <Tabs defaultValue="history" className="xl:col-span-2">
+      <Tabs defaultValue="history">
         <TabsList className="w-fit">
           <TabsTrigger value="history">История</TabsTrigger>
           <TabsTrigger value="progress">Прогресс</TabsTrigger>

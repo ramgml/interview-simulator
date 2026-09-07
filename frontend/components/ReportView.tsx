@@ -144,7 +144,7 @@ export default function ReportView({ report }: { report: Report }) {
       )}
 
       {(report.strengths.length > 0 || report.weaknesses.length > 0) && (
-        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-1">
+        <div className="grid gap-4 sm:grid-cols-2 xl:col-span-2">
           <Card>
             <CardHeader>
               <CardTitle>Сильные стороны</CardTitle>
