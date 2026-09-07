@@ -1,4 +1,4 @@
-"""FastAPI-приложение: CORS :3000, lifespan (create_all + сид + init_mlflow), GET /health.
+"""FastAPI-приложение: CORS из настроек, lifespan (create_all + сид + init_mlflow), GET /health.
 
 Роутеры: audio (/api/stt) — T134, /api/tts — T135, models (/api/models) — T159,
 settings (/api/settings GET/PUT/test) — T133, sessions (/api/sessions, /api/progress) — T131/T132.
@@ -10,10 +10,12 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.config import settings as env
 from app.db import init_db
 from app.tracing import init_mlflow
 from app.routers import audio, models, sessions, settings
 from app.stt import router as stt_router
+
 
 logging.basicConfig(level=logging.INFO)
 
@@ -29,7 +31,7 @@ app = FastAPI(title="interview-simulator", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=env.cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
