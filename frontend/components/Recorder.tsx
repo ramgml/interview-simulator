@@ -2,18 +2,26 @@
 
 import { useEffect, useRef, useState } from "react";
 import { getStoredDeviceId, inputConstraints, setStoredDeviceId } from "@/lib/audio";
+import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { sendAudioAnswer, sendTextAnswer, ApiError, type AnswerOut } from "@/lib/api";
 
 /**
- * Ход кандидата: hold-to-talk (pointerdown/up/leave) → MediaRecorder('audio/webm;codecs=opus')
- * → POST /answer (multipart, поле audio); fallback — ответ текстом.
+ * Ход кандидата: toggle-запись (клик — старт, повторный клик — стоп и отправка)
+ * → MediaRecorder('audio/webm;codecs=opus') → POST /answer (multipart, поле audio);
+ * fallback — ответ текстом.
+ * Анти-дрожание: запись короче MIN_RECORDING_MS наружу не уходит (случайный
+ * двойной клик не должен отправить пустоту).
  * Запись идёт с выбранного в настройках микрофона (localStorage `audio-input-device`,
  * см. lib/audio.ts); устройство недоступно — fallback на default и сброс выбора.
  * Весь блок disabled, пока идёт озвучка вопроса (проп isSpeaking от AudioQueue).
  * Пустой STT (422 «Речь не распознана») — inline-сообщение, запись не падает.
  */
+
+/** Минимальная длительность записи, мс: короче — подсказка вместо отправки. */
+const MIN_RECORDING_MS = 300;
+
 export default function Recorder({
   sessionId,
   isSpeaking,
@@ -30,18 +38,42 @@ export default function Recorder({
   const [textAnswer, setTextAnswer] = useState("");
 
   const recorderRef = useRef<MediaRecorder | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const startedAtRef = useRef(0);
+  // Защелка «старт уже идёт»: recording выставляется только после getUserMedia,
+  // без неё второй клик в этом окне запустит второй стрим/рекордер.
+  const startingRef = useRef(false);
+
+  /** Остановка таймера и треков стрима из ref (образец — фикс T169 в настройках аудио). */
+  function releaseStream() {
+    if (timerRef.current) {
+      clearInterval(timerRef.current);
+      timerRef.current = null;
+    }
+    streamRef.current?.getTracks().forEach((track) => track.stop());
+    streamRef.current = null;
+  }
 
   useEffect(() => {
     return () => {
-      if (timerRef.current) clearInterval(timerRef.current);
-      if (recorderRef.current?.state === "recording") recorderRef.current.stop();
-      recorderRef.current?.stream.getTracks().forEach((track) => track.stop());
+      // Unmount при активной записи: отключаем колбэки рекордера (чтобы onstop
+      // не отправил запись), останавливаем рекордер и треки стрима.
+      const recorder = recorderRef.current;
+      if (recorder) {
+        recorder.ondataavailable = null;
+        recorder.onstop = null;
+        if (recorder.state === "recording") recorder.stop();
+      }
+      releaseStream();
+      chunksRef.current = [];
     };
   }, []);
 
   async function startRecording() {
+    if (startingRef.current) return;
+    startingRef.current = true;
     setError(null);
     let stream: MediaStream;
     try {
@@ -53,6 +85,7 @@ export default function Recorder({
       try {
         stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       } catch {
+        startingRef.current = false;
         setError("Микрофон недоступен. Ответьте текстом или проверьте доступ к микрофону.");
         return;
       }
@@ -61,25 +94,52 @@ export default function Recorder({
     }
     const recorder = new MediaRecorder(stream, { mimeType: "audio/webm;codecs=opus" });
     chunksRef.current = [];
+    streamRef.current = stream;
+    startedAtRef.current = performance.now();
     recorder.ondataavailable = (event) => {
       if (event.data.size > 0) chunksRef.current.push(event.data);
     };
     recorder.onstop = () => {
-      stream.getTracks().forEach((track) => track.stop());
-      void submitAudio(new Blob(chunksRef.current, { type: "audio/webm;codecs=opus" }));
+      const blob = new Blob(chunksRef.current, { type: "audio/webm;codecs=opus" });
+      chunksRef.current = [];
+      if (performance.now() - startedAtRef.current < MIN_RECORDING_MS) {
+        // Анти-дрожание: короткая запись — подсказка вместо отправки.
+        setError("Слишком короткая запись — нажмите и говорите дольше.");
+        return;
+      }
+      void submitAudio(blob);
     };
     recorder.start();
     recorderRef.current = recorder;
+    startingRef.current = false;
     setSeconds(0);
     timerRef.current = setInterval(() => setSeconds((s) => s + 1), 1000);
     setRecording(true);
   }
 
+  /** Повторный клик: стоп записи; финальный чанк и решение об отправке — в onstop. */
   function stopRecording() {
-    if (timerRef.current) clearInterval(timerRef.current);
-    timerRef.current = null;
+    startingRef.current = false;
     setRecording(false);
-    if (recorderRef.current?.state === "recording") recorderRef.current.stop();
+    releaseStream();
+    const recorder = recorderRef.current;
+    recorderRef.current = null;
+    if (recorder?.state === "recording") recorder.stop();
+  }
+
+  /**
+   * Toggle-семантика: один onClick без pointer-событий. Старт асинхронный
+   * (getUserMedia), поэтому повторный клик до готовности отсекается защёлкой
+   * startingRef (синхронно, до await): второй startRecording не запустится,
+   * двойного стрима нет. Машина состояний: idle → starting → recording → sending.
+   */
+  function handleRecordClick() {
+    if (startingRef.current) return; // старт ещё идёт — второй клик игнорируем
+    if (recording) {
+      stopRecording();
+      return;
+    }
+    void startRecording();
   }
 
   async function submitAudio(blob: Blob) {
@@ -127,28 +187,32 @@ export default function Recorder({
         <Button
           type="button"
           size="icon"
-          aria-label={recording ? "Отпустите, чтобы отправить" : "Удерживайте, чтобы говорить"}
-          className="size-14 rounded-full text-base"
+          aria-pressed={recording}
+          aria-label={recording ? "Остановить запись и отправить" : "Говорить"}
+          className={cn(
+            "size-14 rounded-full text-base",
+            recording && "bg-destructive text-white hover:bg-destructive/90",
+          )}
           disabled={disabled}
-          onPointerDown={() => void startRecording()}
-          onPointerUp={stopRecording}
-          onPointerLeave={stopRecording}
+          onClick={handleRecordClick}
         >
-          {recording ? "●" : "🎙"}
+          {recording ? "■" : "🎙"}
         </Button>
         <div className="flex flex-col gap-1">
           <span className="text-sm font-medium flex items-center gap-2">
             {recording && <span className="size-2.5 rounded-full bg-red-600 animate-pulse" />}
             {recording
-              ? `Идёт запись: ${String(Math.floor(seconds / 60)).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`
+              ? `Идёт запись… ${String(Math.floor(seconds / 60)).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")} — нажмите, чтобы отправить`
               : isSpeaking
                 ? "Дождитесь конца озвучки вопроса…"
                 : sending
                   ? "Распознаём и обдумываем ответ…"
-                  : "Удерживайте кнопку и говорите"}
+                  : "Говорить"}
           </span>
           <span className="text-xs text-muted-foreground">
-            Отпустите кнопку — запись уйдёт в распознавание
+            {recording
+              ? "Нажмите ещё раз — запись уйдёт в распознавание"
+              : "Нажмите кнопку и говорите; повторный клик отправит ответ"}
           </span>
         </div>
       </div>
