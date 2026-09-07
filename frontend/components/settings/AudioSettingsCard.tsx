@@ -45,10 +45,13 @@ export default function AudioSettingsCard() {
   const [micLevel, setMicLevel] = useState(0);
   const [micVerdict, setMicVerdict] = useState<string | null>(null);
   const [soundTesting, setSoundTesting] = useState(false);
+  const [soundVerdict, setSoundVerdict] = useState<string | null>(null);
 
   const testRafRef = useRef<number | null>(null);
-  const testTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const testTimeoutRef = useRef<number | undefined>(undefined);
   const testCtxRef = useRef<AudioContext | null>(null);
+  const testStreamRef = useRef<MediaStream | null>(null);
+  const testMicCtxRef = useRef<AudioContext | null>(null);
 
   const refreshDevices = useCallback(async () => {
     try {
@@ -66,7 +69,9 @@ export default function AudioSettingsCard() {
     void refreshDevices();
     return () => {
       if (testRafRef.current !== null) cancelAnimationFrame(testRafRef.current);
-      if (testTimeoutRef.current) clearTimeout(testTimeoutRef.current);
+      clearTimeout(testTimeoutRef.current);
+      testStreamRef.current?.getTracks().forEach((track) => track.stop());
+      void testMicCtxRef.current?.close().catch(() => {});
       void testCtxRef.current?.close().catch(() => {});
     };
   }, [refreshDevices]);
@@ -84,11 +89,9 @@ export default function AudioSettingsCard() {
     setMicTesting(true);
     setMicVerdict(null);
     setMicLevel(0);
-    let stream: MediaStream | null = null;
-    let ctx: AudioContext | null = null;
     let peak = 0;
     const finish = () => {
-      stopMicTest(stream, ctx);
+      stopMicTest();
       setMicTesting(false);
       setMicVerdict(
         peak > 0.05
@@ -97,8 +100,10 @@ export default function AudioSettingsCard() {
       );
     };
     try {
-      stream = await navigator.mediaDevices.getUserMedia({ audio: inputConstraints(inputId) });
-      ctx = new AudioContext();
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: inputConstraints(inputId) });
+      testStreamRef.current = stream;
+      const ctx = new AudioContext();
+      testMicCtxRef.current = ctx;
       const source = ctx.createMediaStreamSource(stream);
       const analyser = ctx.createAnalyser();
       analyser.fftSize = 1024;
@@ -117,26 +122,26 @@ export default function AudioSettingsCard() {
         testRafRef.current = requestAnimationFrame(tick);
       };
       tick();
-      testTimeoutRef.current = setTimeout(finish, 4000);
+      testTimeoutRef.current = window.setTimeout(finish, 4000);
     } catch (err) {
-      stopMicTest(stream, ctx);
+      stopMicTest();
       setMicTesting(false);
       setMicVerdict(describeMicError(err));
     }
   }
 
   /** Полная остановка теста: RAF, таймер, треки стрима, AudioContext. */
-  function stopMicTest(stream: MediaStream | null, ctx: AudioContext | null) {
+  function stopMicTest() {
     if (testRafRef.current !== null) {
       cancelAnimationFrame(testRafRef.current);
       testRafRef.current = null;
     }
-    if (testTimeoutRef.current) {
-      clearTimeout(testTimeoutRef.current);
-      testTimeoutRef.current = null;
-    }
-    stream?.getTracks().forEach((track) => track.stop());
-    void ctx?.close().catch(() => {});
+    clearTimeout(testTimeoutRef.current);
+    testTimeoutRef.current = undefined;
+    testStreamRef.current?.getTracks().forEach((track) => track.stop());
+    testStreamRef.current = null;
+    void testMicCtxRef.current?.close().catch(() => {});
+    testMicCtxRef.current = null;
   }
 
   function describeMicError(err: unknown): string {
@@ -151,6 +156,7 @@ export default function AudioSettingsCard() {
   /** Кнопка «Проверить звук»: тон 1 кГц ~1 сек через выбранный вывод, без бэкенда. */
   async function handleTestSound() {
     setSoundTesting(true);
+    setSoundVerdict(null);
     try {
       const ctx = new AudioContext();
       testCtxRef.current = ctx;
@@ -164,8 +170,12 @@ export default function AudioSettingsCard() {
       oscillator.connect(gain).connect(ctx.destination);
       oscillator.start();
       oscillator.stop(ctx.currentTime + 1);
-      await new Promise((resolve) => setTimeout(resolve, 1100));
+      const { promise, resolve } = Promise.withResolvers<void>();
+      setTimeout(resolve, 1100);
+      await promise;
       void ctx.close().catch(() => {});
+    } catch {
+      setSoundVerdict("Не удалось запустить проверку звука — проверьте устройство вывода");
     } finally {
       testCtxRef.current = null;
       setSoundTesting(false);
@@ -269,6 +279,7 @@ export default function AudioSettingsCard() {
           </div>
         )}
         {micVerdict && <p className="text-sm text-muted-foreground">{micVerdict}</p>}
+        {soundVerdict && <p className="text-sm text-muted-foreground">{soundVerdict}</p>}
       </CardContent>
     </Card>
   );
