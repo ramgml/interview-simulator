@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { getStoredDeviceId, inputConstraints, setStoredDeviceId } from "@/lib/audio";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { sendAudioAnswer, sendTextAnswer, ApiError, type AnswerOut } from "@/lib/api";
@@ -8,6 +9,8 @@ import { sendAudioAnswer, sendTextAnswer, ApiError, type AnswerOut } from "@/lib
 /**
  * Ход кандидата: hold-to-talk (pointerdown/up/leave) → MediaRecorder('audio/webm;codecs=opus')
  * → POST /answer (multipart, поле audio); fallback — ответ текстом.
+ * Запись идёт с выбранного в настройках микрофона (localStorage `audio-input-device`,
+ * см. lib/audio.ts); устройство недоступно — fallback на default и сброс выбора.
  * Весь блок disabled, пока идёт озвучка вопроса (проп isSpeaking от AudioQueue).
  * Пустой STT (422 «Речь не распознана») — inline-сообщение, запись не падает.
  */
@@ -40,25 +43,36 @@ export default function Recorder({
 
   async function startRecording() {
     setError(null);
+    let stream: MediaStream;
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const recorder = new MediaRecorder(stream, { mimeType: "audio/webm;codecs=opus" });
-      chunksRef.current = [];
-      recorder.ondataavailable = (event) => {
-        if (event.data.size > 0) chunksRef.current.push(event.data);
-      };
-      recorder.onstop = () => {
-        stream.getTracks().forEach((track) => track.stop());
-        void submitAudio(new Blob(chunksRef.current, { type: "audio/webm;codecs=opus" }));
-      };
-      recorder.start();
-      recorderRef.current = recorder;
-      setSeconds(0);
-      timerRef.current = setInterval(() => setSeconds((s) => s + 1), 1000);
-      setRecording(true);
+      // Точный deviceId выбранного микрофона; при отказе/устаревшем id — default.
+      stream = await navigator.mediaDevices.getUserMedia({
+        audio: inputConstraints(getStoredDeviceId("input")),
+      });
     } catch {
-      setError("Микрофон недоступен. Ответьте текстом или проверьте доступ к микрофону.");
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      } catch {
+        setError("Микрофон недоступен. Ответьте текстом или проверьте доступ к микрофону.");
+        return;
+      }
+      // Сохранённый id перестал работать — сбрасываем на устройство по умолчанию.
+      setStoredDeviceId("input", null);
     }
+    const recorder = new MediaRecorder(stream, { mimeType: "audio/webm;codecs=opus" });
+    chunksRef.current = [];
+    recorder.ondataavailable = (event) => {
+      if (event.data.size > 0) chunksRef.current.push(event.data);
+    };
+    recorder.onstop = () => {
+      stream.getTracks().forEach((track) => track.stop());
+      void submitAudio(new Blob(chunksRef.current, { type: "audio/webm;codecs=opus" }));
+    };
+    recorder.start();
+    recorderRef.current = recorder;
+    setSeconds(0);
+    timerRef.current = setInterval(() => setSeconds((s) => s + 1), 1000);
+    setRecording(true);
   }
 
   function stopRecording() {
