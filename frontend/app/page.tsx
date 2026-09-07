@@ -131,7 +131,7 @@ export default function HomePage() {
   }
 
   return (
-    <main className="mx-auto w-full max-w-3xl flex-1 px-4 py-8 flex flex-col gap-8">
+    <main className="mx-auto w-full max-w-3xl 2xl:max-w-screen-2xl flex-1 px-4 py-8 flex flex-col gap-8">
       <div className="flex items-center justify-between gap-4">
         <h1 className="text-2xl font-semibold tracking-tight">Тренажёр собеседований</h1>
         <Button variant="outline" asChild>
@@ -142,8 +142,9 @@ export default function HomePage() {
         </Button>
       </div>
 
-      <Card>
-        <CardHeader>
+      <div className="flex flex-col gap-8 xl:grid xl:grid-cols-2 xl:items-start xl:gap-8">
+        <Card>
+          <CardHeader>
           <CardTitle>Новая сессия</CardTitle>
           <CardDescription>Вставьте текст вакансии — ИИ составит план интервью</CardDescription>
         </CardHeader>
@@ -221,8 +222,8 @@ export default function HomePage() {
         </CardContent>
       </Card>
 
-      <Tabs defaultValue="history">
-        <TabsList>
+      <Tabs defaultValue="history" className="xl:col-span-2">
+        <TabsList className="w-fit">
           <TabsTrigger value="history">История</TabsTrigger>
           <TabsTrigger value="progress">Прогресс</TabsTrigger>
         </TabsList>
@@ -308,6 +309,7 @@ export default function HomePage() {
           <ProgressView />
         </TabsContent>
       </Tabs>
+      </div>
     </main>
   );
 }
