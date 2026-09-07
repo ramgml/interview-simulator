@@ -19,6 +19,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+import AudioSettingsCard from "@/components/settings/AudioSettingsCard";
 import { Separator } from "@/components/ui/separator";
 import { toast } from "sonner";
 import {
@@ -269,6 +270,7 @@ export default function SettingsPage() {
           </div>
         </CardContent>
       </Card>
+      <AudioSettingsCard />
 
       <Separator />
 
