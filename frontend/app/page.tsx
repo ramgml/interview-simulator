@@ -1,9 +1,9 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
-import { Settings } from "lucide-react";
 import { useRouter } from "next/navigation";
+import { useCallback, useEffect, useState } from "react";
+import { Mic, Settings } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -12,7 +12,6 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import {
@@ -53,6 +52,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
+import AudioSettingsCard from "@/components/settings/AudioSettingsCard";
 
 const SENIORITY_LABELS: Record<string, string> = {
   junior: "Junior",
@@ -66,6 +66,17 @@ const STYLE_LABELS: Record<string, string> = {
   strict: "Строгий",
   realistic: "Реалистичный",
 };
+/** Ключ черновика формы в sessionStorage: 5 полей формы в одном JSON. */
+const DRAFT_STORAGE_KEY = "interview-simulator.vacancy-draft";
+
+/** Дефолтные значения формы; до восстановления совпадают с начальным useState. */
+const DRAFT_DEFAULTS = {
+  vacancyText: "",
+  seniority: "middle",
+  language: "ru",
+  style: "realistic",
+  plannedQuestions: "8",
+};
 
 const STATUS_LABELS: Record<string, { label: string; variant: "default" | "secondary" | "destructive" | "outline" }> = {
   created: { label: "Создана", variant: "outline" },
@@ -77,11 +88,14 @@ const STATUS_LABELS: Record<string, { label: string; variant: "default" | "secon
 /** Главная: новая сессия (Card) + вкладки «История» и «Прогресс». */
 export default function HomePage() {
   const router = useRouter();
-  const [vacancyText, setVacancyText] = useState("");
-  const [seniority, setSeniority] = useState("middle");
-  const [language, setLanguage] = useState("ru");
-  const [style, setStyle] = useState("realistic");
-  const [plannedQuestions, setPlannedQuestions] = useState("8");
+  const [draftRestored, setDraftRestored] = useState(false);
+  const [vacancyText, setVacancyText] = useState(DRAFT_DEFAULTS.vacancyText);
+  const [seniority, setSeniority] = useState(DRAFT_DEFAULTS.seniority);
+  const [language, setLanguage] = useState(DRAFT_DEFAULTS.language);
+  const [style, setStyle] = useState(DRAFT_DEFAULTS.style);
+  const [plannedQuestions, setPlannedQuestions] = useState(
+    DRAFT_DEFAULTS.plannedQuestions,
+  );
   const [creating, setCreating] = useState(false);
   const [sessions, setSessions] = useState<SessionBrief[] | null>(null);
   const [cancelId, setCancelId] = useState<string | null>(null);
@@ -97,6 +111,38 @@ export default function HomePage() {
     refreshSessions();
   }, [refreshSessions]);
 
+  // Восстановление черновика на маунте (в микротаске — react-hooks
+  // запрещает синхронный setState в теле эффекта). Save-эффект ниже до
+  // этого момента не пишет в хранилище: иначе первый рендер затрёт черновик.
+  useEffect(() => {
+    queueMicrotask(() => {
+      try {
+        const raw = window.sessionStorage.getItem(DRAFT_STORAGE_KEY);
+        if (raw) {
+          const draft = JSON.parse(raw) as Partial<typeof DRAFT_DEFAULTS>;
+          setVacancyText(draft.vacancyText ?? DRAFT_DEFAULTS.vacancyText);
+          setSeniority(draft.seniority ?? DRAFT_DEFAULTS.seniority);
+          setLanguage(draft.language ?? DRAFT_DEFAULTS.language);
+          setStyle(draft.style ?? DRAFT_DEFAULTS.style);
+          setPlannedQuestions(
+            draft.plannedQuestions ?? DRAFT_DEFAULTS.plannedQuestions,
+          );
+        }
+      } catch {
+        // Битый JSON или недоступный storage — остаёмся на дефолтах.
+      }
+      setDraftRestored(true);
+    });
+  }, []);
+
+  // Сохранение черновика: после восстановления каждое изменение формы
+  // зеркалим в sessionStorage; до восстановления — не пишем.
+  useEffect(() => {
+    if (!draftRestored) return;
+    const draft = { vacancyText, seniority, language, style, plannedQuestions };
+    window.sessionStorage.setItem(DRAFT_STORAGE_KEY, JSON.stringify(draft));
+  }, [draftRestored, vacancyText, seniority, language, style, plannedQuestions]);
+
   async function handleCreate() {
     if (!vacancyText.trim() || creating) return;
     setCreating(true);
@@ -109,6 +155,8 @@ export default function HomePage() {
         planned_questions: Number(plannedQuestions),
       });
       await startSession(id);
+      // Сессия запущена — черновик больше не нужен (ошибка оставляет черновик).
+      window.sessionStorage.removeItem(DRAFT_STORAGE_KEY);
       router.push(`/session/${id}`);
     } catch (exc) {
       setCreating(false);
@@ -216,9 +264,33 @@ export default function HomePage() {
               ))}
             </RadioGroup>
           </div>
-          <Button onClick={() => void handleCreate()} disabled={!vacancyText.trim() || creating}>
-            {creating ? "Готовим интервью…" : "Начать собеседование"}
-          </Button>
+          <div className="flex gap-2">
+            <Button onClick={() => void handleCreate()} disabled={!vacancyText.trim() || creating} className="flex-1">
+              {creating ? "Готовим интервью…" : "Начать собеседование"}
+            </Button>
+            <Dialog>
+              <DialogTrigger asChild>
+                <Button variant="outline">
+                  <Mic className="size-4" />
+                  Проверить микрофон
+                </Button>
+              </DialogTrigger>
+              <DialogContent className="sm:max-w-2xl">
+                <DialogHeader>
+                  <DialogTitle>Проверка микрофона</DialogTitle>
+                  <DialogDescription>
+                    Скажите пару слов — индикатор покажет уровень сигнала.
+                  </DialogDescription>
+                </DialogHeader>
+                <AudioSettingsCard />
+                <DialogFooter>
+                  <DialogClose asChild>
+                    <Button>Готово</Button>
+                  </DialogClose>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
+          </div>
         </CardContent>
       </Card>
 
