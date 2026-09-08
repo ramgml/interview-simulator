@@ -3,12 +3,13 @@
 import asyncio
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from sqlalchemy import select
 from sqlalchemy.orm import Session as DbSession
 from app import evaluator, interviewer, llm, stt, tracing
+from app.config import settings as env
 from app.db import get_db
 from app.errors import EmptyTranscript, InterviewError
 from app.interviewer import MAX_TURNS
@@ -41,7 +42,11 @@ def create_session(req: SessionCreate, db: DbSession = Depends(get_db)) -> Sessi
 
 @router.post("/api/sessions/{session_id}/start")
 def start_session(session_id: str, db: DbSession = Depends(get_db)) -> dict:
-    """PLAN: build_plan → plan_json; первый вопрос → turns; status=in_progress, started_at."""
+    """PLAN: build_plan → plan_json; первый вопрос → turns; status=in_progress, started_at.
+
+    Guard гонки (T162): если сессию отменили/завершили во время LLM-вызова, статус
+    перечитывается из БД и in_progress/started_at не перезаписывают completed/failed.
+    """
     session = _get_session(db, session_id)
     if session.status != "created":
         raise _http_error(409, f"Сессия уже начата (status={session.status})")
@@ -51,13 +56,18 @@ def start_session(session_id: str, db: DbSession = Depends(get_db)) -> dict:
     except InterviewError as exc:
         _fail(db, session, exc)
         raise _http_error(502, str(exc)) from exc
+    # Guard гонки (T162): cancel мог завершить сессию, пока шёл LLM-вызов PLAN, —
+    # статус перечитываем из БД: план и interviewer-ход записываем (история честная),
+    # но статусные записи не применяем поверх отмены (in_progress/started_at).
+    cancelled = _refreshed_status(db, session) in ("completed", "failed")
     session.plan_json = json.dumps(plan, ensure_ascii=False)
     session.position_title = str(plan.get("position_title") or session.position_title or "")
     question = interviewer.first_question(plan)
     if question:
         _add_turn(db, session, role="interviewer", text=question)
-    session.status = "in_progress"
-    session.started_at = utcnow()
+    if not cancelled:
+        session.status = "in_progress"
+        session.started_at = utcnow()
     db.commit()
     return _session_state(db, session)
 
@@ -117,6 +127,10 @@ async def answer_session(
         _fail(db, session, exc)
         raise _http_error(502, str(exc)) from exc
 
+    # Guard гонки (T162): cancel мог завершить сессию, пока шёл LLM-вызов TURN, —
+    # статус перечитываем из БД: interviewer-ход оставляем (история честная),
+    # но финал поверх отмены не выполняем (_complete/_finalize_session).
+    cancelled = _refreshed_status(db, session) in ("completed", "failed")
     action = decision.get("action", "next_question")
     done = action == "finish"
     if len(turns) >= MAX_TURNS:
@@ -132,7 +146,7 @@ async def answer_session(
     )
     db.commit()
 
-    if done:
+    if done and not cancelled:
         _complete(db, session)
         _finalize_session(db, session)
     return AnswerOut(
@@ -154,9 +168,21 @@ def finish_session(session_id: str, db: DbSession = Depends(get_db)) -> dict:
     return _session_state(db, session)
 
 
+@router.post("/api/sessions/{session_id}/cancel")
+def cancel_session(session_id: str, db: DbSession = Depends(get_db)) -> dict:
+    """Отмена без оценки: completed + error «Отменено пользователем»; evaluate/MLflow не зовём."""
+    session = _get_session(db, session_id)
+    if session.status not in ("in_progress", "created"):
+        raise _http_error(409, f"Сессия не идёт (status={session.status})")
+    session.error = "Отменено пользователем"
+    _complete(db, session)
+    return _session_state(db, session)
+
+
 @router.get("/api/sessions")
 def list_sessions(db: DbSession = Depends(get_db)) -> list[dict]:
-    """История: список сессий (без turns)."""
+    """История: список сессий (без turns); перед выдачей — ленивое автозакрытие осиротевших."""
+    _close_orphans(db)
     rows = db.execute(select(Session).order_by(Session.created_at.desc())).scalars().all()
     return [_session_brief(row) for row in rows]
 
@@ -289,6 +315,33 @@ def _complete(db: DbSession, session: Session) -> None:
     db.commit()
 
 
+def _close_orphans(db: DbSession) -> None:
+    """Ленивое автозакрытие: in_progress без ходов дольше orphan_close_hours → отменена (T158).
+
+    Последний ход — максимум turns.created_at; без ходов — started_at (нет — created_at).
+    Выключается orphan_close_hours <= 0.
+    """
+    if env.orphan_close_hours <= 0:
+        return
+    threshold = utcnow() - timedelta(hours=env.orphan_close_hours)
+    orphans = db.execute(
+        select(Session).where(Session.status == "in_progress")
+    ).scalars().all()
+    for session in orphans:
+        last_turn_at = db.execute(
+            select(Turn.created_at)
+            .where(Turn.session_id == session.id)
+            .order_by(Turn.created_at.desc())
+            .limit(1)
+        ).scalar()
+        last_activity = last_turn_at or session.started_at or session.created_at
+        if last_activity.tzinfo is None:
+            last_activity = last_activity.replace(tzinfo=timezone.utc)
+        if last_activity < threshold:
+            session.error = "Отменено пользователем"
+            _complete(db, session)
+
+
 def _finalize_session(db: DbSession, session: Session) -> None:
     """Оценка + финал: report_json/overall_score до log_session_run (ARCHITECTURE §Оценщик/§MLflow).
 
@@ -320,8 +373,20 @@ def _finalize_session(db: DbSession, session: Session) -> None:
     )
 
 
+def _refreshed_status(db: DbSession, session: Session) -> str:
+    """Актуальный статус из БД: чужой коммит (cancel) identity map не виден без refresh (T162)."""
+    db.refresh(session)
+    return session.status
+
+
 def _fail(db: DbSession, session: Session, exc: Exception) -> None:
-    """Необработанная ошибка start/answer: status=failed, error (ARCHITECTURE §API)."""
+    """Необработанная ошибка start/answer: status=failed, error (ARCHITECTURE §API).
+
+    Guard гонки (T162): если сессия уже завершена (cancel/finalize успел раньше),
+    failed не перезаписывает completed — отмена важнее.
+    """
+    if _refreshed_status(db, session) in ("completed", "failed"):
+        return
     session.status = "failed"
     session.error = str(exc)
     db.commit()
@@ -343,6 +408,7 @@ def _session_brief(session: Session) -> dict:
         "style": session.style,
         "planned_questions": session.planned_questions,
         "overall_score": session.overall_score,
+        "error": session.error,
     }
 
 

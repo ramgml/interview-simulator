@@ -61,7 +61,7 @@ export default function ReportView({ report }: { report: Report }) {
   const hire = report.hire_recommendation ? HIRE_LABELS[report.hire_recommendation] : undefined;
 
   return (
-    <div className="flex flex-col gap-6">
+    <div className="flex flex-col gap-6 xl:grid xl:grid-cols-2 xl:items-start xl:gap-6">
       {report.degraded && (
         <Alert>
           <AlertTitle>Отчёт сформирован в упрощённом виде</AlertTitle>
@@ -98,7 +98,7 @@ export default function ReportView({ report }: { report: Report }) {
             {report.competencies.map((comp) => (
               <div key={comp.name} className="flex flex-col gap-1">
                 <div className="flex items-center gap-3">
-                  <span className="w-48 shrink-0 text-sm font-medium">{comp.name}</span>
+                  <span className="min-w-48 text-sm font-medium break-words">{comp.name}</span>
                   <Progress value={(comp.score ?? 0) * 10} className="flex-1" />
                   <span className="w-10 text-right text-sm tabular-nums">
                     {comp.score ?? "—"}
@@ -112,7 +112,7 @@ export default function ReportView({ report }: { report: Report }) {
       )}
 
       {report.turn_feedback.length > 0 && (
-        <Card>
+        <Card className="xl:col-span-2">
           <CardHeader>
             <CardTitle>Разбор ответов</CardTitle>
             <CardDescription>Вопрос → ваш ответ → что хорошо и что упущено</CardDescription>
@@ -144,7 +144,7 @@ export default function ReportView({ report }: { report: Report }) {
       )}
 
       {(report.strengths.length > 0 || report.weaknesses.length > 0) && (
-        <div className="grid gap-4 sm:grid-cols-2">
+        <div className="grid gap-4 sm:grid-cols-2 xl:col-span-2">
           <Card>
             <CardHeader>
               <CardTitle>Сильные стороны</CardTitle>
@@ -152,7 +152,7 @@ export default function ReportView({ report }: { report: Report }) {
             <CardContent className="flex flex-wrap gap-2">
               {report.strengths.length > 0 ? (
                 report.strengths.map((item, index) => (
-                  <Badge key={index} variant="secondary">
+                  <Badge key={index} variant="secondary" className="whitespace-normal text-left max-w-full break-words">
                     {item}
                   </Badge>
                 ))
@@ -168,7 +168,7 @@ export default function ReportView({ report }: { report: Report }) {
             <CardContent className="flex flex-wrap gap-2">
               {report.weaknesses.length > 0 ? (
                 report.weaknesses.map((item, index) => (
-                  <Badge key={index} variant="outline">
+                  <Badge key={index} variant="outline" className="whitespace-normal text-left max-w-full break-words">
                     {item}
                   </Badge>
                 ))
@@ -181,7 +181,7 @@ export default function ReportView({ report }: { report: Report }) {
       )}
 
       {report.plan.length > 0 && (
-        <Card>
+        <Card className="xl:col-span-2">
           <CardHeader>
             <CardTitle>План подготовки</CardTitle>
             <CardDescription>Тема → что сделать</CardDescription>

@@ -17,10 +17,22 @@ logger = logging.getLogger(__name__)
 
 EXPERIMENT_NAME = "interview-simulator"
 
+# .env лежит в корне репозитория; make-цели запускаются из backend/.
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _repo_relative_sqlite_url(url: str) -> str:
+    """Якорит относительный sqlite-путь (sqlite:///data/app.db) к корню репозитория."""
+    # аналогично db.py
+    prefix = "sqlite:///"
+    if url.startswith(prefix) and not url.startswith(prefix + "/"):
+        return prefix + str((_REPO_ROOT / url[len(prefix):]).resolve())
+    return url
+
 
 def init_mlflow() -> None:
     """tracking_uri из env, эксперимент, autolog openai-трейсов."""
-    mlflow.set_tracking_uri(env.mlflow_tracking_uri)
+    mlflow.set_tracking_uri(_repo_relative_sqlite_url(env.mlflow_tracking_uri))
     mlflow.set_experiment(EXPERIMENT_NAME)
     mlflow_openai.autolog(log_traces=True)
 

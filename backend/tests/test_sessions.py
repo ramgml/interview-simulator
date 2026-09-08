@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from app import evaluator, interviewer, llm, stt, tracing
+from app.config import settings as env
 from app.db import init_db
 from app.errors import InterviewError
 from app.main import app
@@ -633,3 +634,226 @@ def test_progress_ignores_non_completed_and_broken_report_json(client):
     assert [s["position_title"] for s in body["sessions"]] == ["Битый"]
     assert body["averages"] == {}
     assert body["trend"] is None
+
+
+# --- cancel: отмена без оценки (T158) --------------------------------------------------
+
+
+def test_cancel_in_progress_completes_without_evaluation(client, plan_client, monkeypatch):
+    """cancel: in_progress → completed, error=«Отменено пользователем», без отчёта и балла."""
+
+    def fail_fast(*args, **kwargs):
+        raise AssertionError("cancel не должен вызывать evaluate")
+
+    monkeypatch.setattr(evaluator, "evaluate", fail_fast)
+    sid = _create(client)
+    _start(client, sid)
+    resp = client.post(f"/api/sessions/{sid}/cancel")
+    assert resp.status_code == 200
+    state = resp.json()
+    assert state["status"] == "completed"
+    assert state["error"] == "Отменено пользователем"
+    assert state["overall_score"] is None
+    assert state["duration_sec"] is not None
+    saved = _stored_session(sid)
+    assert saved.report_json is None
+    assert saved.mlflow_run_id is None
+
+
+def test_cancel_created_session_completes_without_duration(client, plan_client):
+    """cancel до старта: разрешён, completed без duration_sec (started_at нет)."""
+    sid = _create(client)
+    resp = client.post(f"/api/sessions/{sid}/cancel")
+    assert resp.status_code == 200
+    state = resp.json()
+    assert state["status"] == "completed"
+    assert state["error"] == "Отменено пользователем"
+    assert state["duration_sec"] is None
+
+
+def test_cancel_completed_session_409(client, plan_client):
+    sid = _create(client)
+    _start(client, sid)
+    assert client.post(f"/api/sessions/{sid}/finish").status_code == 200
+    resp = client.post(f"/api/sessions/{sid}/cancel")
+    assert resp.status_code == 409
+    assert "Сессия не идёт" in resp.json()["detail"]
+
+
+def test_cancel_missing_session_404(client):
+    assert client.post("/api/sessions/nope/cancel").status_code == 404
+
+
+def test_cancelled_session_has_no_report(client, plan_client):
+    """У отменённой сессии report_json не пишется → GET /report отдаёт 404."""
+    sid = _create(client)
+    _start(client, sid)
+    assert client.post(f"/api/sessions/{sid}/cancel").status_code == 200
+    assert client.get(f"/api/sessions/{sid}/report").status_code == 404
+
+
+# --- гонка cancel vs завершившийся LLM-ход (T162) ---------------------------------------
+
+
+def _cancel_mid_llm(monkeypatch, phase: str, sid: str):
+    """Стаб json_chat: детерминированная гонка — чужое соединение коммитит cancel-эффект
+
+    (status=completed, error=«Отменено пользователем», completed_at) ВНУТРИ LLM-вызова:
+    прямой UPDATE в ту же tmp-БД = точный эквивалент параллельного POST /cancel.
+    phase: "plan" — эффект в PLAN-вызове (start), "turn" — в TURN-вызове (answer).
+    """
+    import app.db as db_mod
+
+    def stub(client, model, messages, *, temperature, max_tokens):
+        is_plan = "rounds" not in messages[1]["content"]
+        if (phase == "plan") == is_plan:
+            db = db_mod.SessionFactory()
+            row = db.get(Session, sid)
+            row.status = "completed"
+            row.error = "Отменено пользователем"
+            row.completed_at = row.started_at
+            db.commit()
+            db.close()
+        if is_plan:
+            return PLAN
+        return {"action": "finish", "text": "Спасибо за интервью", "covered_topic": None}
+
+    monkeypatch.setattr(interviewer, "json_chat", stub)
+
+
+def test_start_cancel_during_plan_keeps_completed(client, plan_client, monkeypatch):
+    """cancel во время PLAN → start не оживляет сессию: status=completed, started_at null."""
+    sid = _create(client)
+    _cancel_mid_llm(monkeypatch, "plan", sid)
+    resp = client.post(f"/api/sessions/{sid}/start")
+    assert resp.status_code == 200
+    state = client.get(f"/api/sessions/{sid}").json()
+    assert state["status"] == "completed"
+    assert state["started_at"] is None
+    assert state["error"] == "Отменено пользователем"
+
+
+def test_answer_cancel_during_turn_keeps_completed_and_keeps_interviewer_turn(
+    client, plan_client, monkeypatch
+):
+    """cancel во время TURN (не-done) → статус не перезаписывается; interviewer-ход есть."""
+    sid = _create(client)
+    _cancel_mid_llm(monkeypatch, "turn", sid)  # TURN-стаб вернёт finish → done-ветка покрыта
+    _start(client, sid)
+    resp = client.post(f"/api/sessions/{sid}/answer", json={"text": "ответ кандидата"})
+    assert resp.status_code == 200
+    state = client.get(f"/api/sessions/{sid}").json()
+    assert state["status"] == "completed"
+    assert state["error"] == "Отменено пользователем"
+    roles = [t["role"] for t in state["turns"]]
+    assert roles == ["interviewer", "candidate", "interviewer"]
+
+
+def test_answer_cancel_during_turn_no_double_final(client, plan_client, monkeypatch):
+    """cancel во время TURN (done) → report_json/score не пишутся поверх отмены."""
+    sid = _create(client)
+    _cancel_mid_llm(monkeypatch, "turn", sid)
+    _start(client, sid)
+    resp = client.post(f"/api/sessions/{sid}/answer", json={"text": "ответ кандидата"})
+    assert resp.status_code == 200
+    saved = _stored_session(sid)
+    assert saved.status == "completed"
+    assert saved.error == "Отменено пользователем"
+    assert saved.report_json is None
+    assert saved.overall_score is None
+    assert saved.mlflow_run_id is None
+
+
+def test_fail_after_cancel_keeps_completed(client, plan_client, monkeypatch):
+    """InterviewError после чужого cancel → failed не перезаписывает completed/error."""
+    sid = _create(client)
+
+    def cancel_then_boom(client, model, messages, *, temperature, max_tokens):
+        import app.db as db_mod
+
+        db = db_mod.SessionFactory()
+        row = db.get(Session, sid)
+        row.status = "completed"
+        row.error = "Отменено пользователем"
+        row.completed_at = row.created_at
+        db.commit()
+        db.close()
+        raise InterviewError("Сервис LLM недоступен")
+
+    monkeypatch.setattr(interviewer, "json_chat", cancel_then_boom)
+    resp = client.post(f"/api/sessions/{sid}/start")
+    assert resp.status_code == 502
+    saved = _stored_session(sid)
+    assert saved.status == "completed"
+    assert saved.error == "Отменено пользователем"
+
+
+# --- ленивое автозакрытие осиротевших in_progress (T158) --------------------------------
+
+
+def _in_progress_with_turn(turn_hours_ago: float | None) -> str:
+    """in_progress-сессия с ходом; turn_hours_ago — возраст хода в часах (None — без хода)."""
+    import app.db as db_mod
+    from datetime import datetime, timedelta, timezone
+
+    db = db_mod.SessionFactory()
+    session = Session(status="in_progress", position_title="Python", vacancy_text="в")
+    age_hours = turn_hours_ago if turn_hours_ago is not None else env.orphan_close_hours + 1
+    started = datetime.now(timezone.utc) - timedelta(hours=age_hours + 1)
+    session.started_at = started
+    db.add(session)
+    db.commit()
+    if turn_hours_ago is not None:
+        db.add(
+            Turn(
+                session_id=session.id,
+                idx=1,
+                role="interviewer",
+                text="Вопрос?",
+                created_at=datetime.now(timezone.utc) - timedelta(hours=turn_hours_ago),
+            )
+        )
+        db.commit()
+    sid = session.id
+    db.expunge(session)
+    db.close()
+    return sid
+
+
+def test_list_sessions_closes_stale_in_progress(client, plan_client):
+    """Последний ход старше N часов → после GET /api/sessions сессия completed-отменена."""
+    sid = _in_progress_with_turn(env.orphan_close_hours + 1)
+    rows = client.get("/api/sessions").json()
+    row = next(r for r in rows if r["id"] == sid)
+    assert row["status"] == "completed"
+    assert row["error"] == "Отменено пользователем"
+    saved = _stored_session(sid)
+    assert saved.error == "Отменено пользователем"
+    assert saved.report_json is None
+
+
+def test_list_sessions_keeps_fresh_in_progress(client, plan_client):
+    """Свежая in_progress-сессия автозакрытием не трогается."""
+    sid = _in_progress_with_turn(1)
+    rows = client.get("/api/sessions").json()
+    row = next(r for r in rows if r["id"] == sid)
+    assert row["status"] == "in_progress"
+
+
+def test_list_sessions_closes_orphan_without_turns(client, plan_client):
+    """Осиротевшая без ходов: возраст считается от started_at."""
+    sid = _in_progress_with_turn(None)
+    rows = client.get("/api/sessions").json()
+    row = next(r for r in rows if r["id"] == sid)
+    assert row["status"] == "completed"
+    assert _stored_session(sid).error == "Отменено пользователем"
+
+
+def test_list_sessions_orphan_close_disabled_when_zero(client, plan_client, monkeypatch):
+    """orphan_close_hours <= 0 — автозакрытие выключено."""
+    monkeypatch.setattr(env, "orphan_close_hours", 0)
+    sid = _in_progress_with_turn(25)
+    rows = client.get("/api/sessions").json()
+    row = next(r for r in rows if r["id"] == sid)
+    assert row["status"] == "in_progress"
+    assert _stored_session(sid).error is None

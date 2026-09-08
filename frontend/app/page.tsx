@@ -1,6 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import Link from "next/link";
+import { Settings } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import {
@@ -33,7 +35,24 @@ import {
 } from "@/components/ui/table";
 import { toast } from "sonner";
 import ProgressView from "@/components/ProgressView";
-import { createSession, startSession, listSessions, ApiError, type SessionBrief } from "@/lib/api";
+import {
+  cancelSession,
+  createSession,
+  startSession,
+  listSessions,
+  ApiError,
+  type SessionBrief,
+} from "@/lib/api";
+import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
 
 const SENIORITY_LABELS: Record<string, string> = {
   junior: "Junior",
@@ -65,6 +84,8 @@ export default function HomePage() {
   const [plannedQuestions, setPlannedQuestions] = useState("8");
   const [creating, setCreating] = useState(false);
   const [sessions, setSessions] = useState<SessionBrief[] | null>(null);
+  const [cancelId, setCancelId] = useState<string | null>(null);
+  const [canceling, setCanceling] = useState(false);
 
   const refreshSessions = useCallback(() => {
     listSessions()
@@ -95,12 +116,35 @@ export default function HomePage() {
     }
   }
 
-  return (
-    <main className="mx-auto w-full max-w-3xl flex-1 px-4 py-8 flex flex-col gap-8">
-      <h1 className="text-2xl font-semibold tracking-tight">Тренажёр собеседований</h1>
+  async function handleCancelRow() {
+    if (!cancelId || canceling) return;
+    setCanceling(true);
+    try {
+      await cancelSession(cancelId);
+      setCancelId(null);
+      refreshSessions();
+    } catch (exc) {
+      toast.error(exc instanceof ApiError ? exc.message : "Не удалось прервать сессию");
+    } finally {
+      setCanceling(false);
+    }
+  }
 
-      <Card>
-        <CardHeader>
+  return (
+    <main className="mx-auto w-full max-w-3xl 2xl:max-w-screen-2xl flex-1 px-4 py-8 flex flex-col gap-8">
+      <div className="flex items-center justify-between gap-4">
+        <h1 className="text-2xl font-semibold tracking-tight">Тренажёр собеседований</h1>
+        <Button variant="outline" asChild>
+          <Link href="/settings" aria-label="Настройки">
+            <Settings className="size-4" />
+            Настройки
+          </Link>
+        </Button>
+      </div>
+
+      <div className="flex flex-col gap-8 xl:grid xl:grid-cols-2 xl:items-start xl:gap-8">
+        <Card>
+          <CardHeader>
           <CardTitle>Новая сессия</CardTitle>
           <CardDescription>Вставьте текст вакансии — ИИ составит план интервью</CardDescription>
         </CardHeader>
@@ -179,7 +223,7 @@ export default function HomePage() {
       </Card>
 
       <Tabs defaultValue="history">
-        <TabsList>
+        <TabsList className="w-fit">
           <TabsTrigger value="history">История</TabsTrigger>
           <TabsTrigger value="progress">Прогресс</TabsTrigger>
         </TabsList>
@@ -216,10 +260,42 @@ export default function HomePage() {
                         {session.overall_score ?? "—"}
                       </TableCell>
                       <TableCell className="text-right">
-                        {session.status === "completed" && (
+                        {session.status === "completed" && !session.error && (
                           <Button variant="link" className="h-auto p-0" asChild>
                             <a href={`/session/${session.id}/report`}>Отчёт</a>
                           </Button>
+                        )}
+                        {session.status === "in_progress" && (
+                          <Dialog
+                            open={cancelId === session.id}
+                            onOpenChange={(open) => !open && setCancelId(null)}
+                          >
+                            <DialogTrigger asChild onClick={() => setCancelId(session.id)}>
+                              <Button variant="link" className="h-auto p-0">
+                                Прервать
+                              </Button>
+                            </DialogTrigger>
+                            <DialogContent>
+                              <DialogHeader>
+                                <DialogTitle>Прервать интервью?</DialogTitle>
+                                <DialogDescription>
+                                  Сессия будет завершена без оценки и отчёта. Продолжить нельзя.
+                                </DialogDescription>
+                              </DialogHeader>
+                              <DialogFooter>
+                                <DialogClose asChild>
+                                  <Button variant="outline">Продолжить интервью</Button>
+                                </DialogClose>
+                                <Button
+                                  variant="destructive"
+                                  disabled={canceling}
+                                  onClick={() => void handleCancelRow()}
+                                >
+                                  {canceling ? "Прерываем…" : "Прервать"}
+                                </Button>
+                              </DialogFooter>
+                            </DialogContent>
+                          </Dialog>
                         )}
                       </TableCell>
                     </TableRow>
@@ -233,6 +309,7 @@ export default function HomePage() {
           <ProgressView />
         </TabsContent>
       </Tabs>
+      </div>
     </main>
   );
 }

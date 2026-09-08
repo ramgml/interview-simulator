@@ -49,7 +49,7 @@ def resolve_model(s: Settings) -> str:
 def chat(
     client: OpenAI, model: str, messages: list[dict], *, temperature: float, max_tokens: int
 ) -> tuple[str, dict]:
-    """Один ход LLM → (content, usage-dict). Ошибка провайдера → InterviewError (наружу 502)."""
+    """Один ход LLM → (content, usage-dict с finish_reason). Ошибка провайдера → InterviewError."""
     try:
         resp = client.chat.completions.create(
             model=model,
@@ -61,13 +61,15 @@ def chat(
         logger.error("LLM call failed: %s", exc)
         raise InterviewError("Сервис LLM недоступен") from exc
     content = resp.choices[0].message.content or ""
-    usage = {}
+    usage = {"finish_reason": resp.choices[0].finish_reason}
     if resp.usage is not None:
-        usage = {
-            "prompt_tokens": resp.usage.prompt_tokens,
-            "total_tokens": resp.usage.total_tokens,
-            "completion_tokens": resp.usage.completion_tokens,
-        }
+        usage.update(
+            {
+                "prompt_tokens": resp.usage.prompt_tokens,
+                "total_tokens": resp.usage.total_tokens,
+                "completion_tokens": resp.usage.completion_tokens,
+            }
+        )
     return content, usage
 
 
@@ -83,18 +85,27 @@ def _strip_json_fences(text: str) -> str:
 def json_chat(
     client: OpenAI, model: str, messages: list[dict], *, temperature: float, max_tokens: int
 ) -> dict:
-    """chat → срез ```-заборов → json.loads; один ретрай с доп. system-промптом; далее ошибка."""
+    """chat → срез ```-заборов → json.loads; при ошибке один ретрай: при finish_reason=length
+    с удвоенным max_tokens (без доп. system-промпта), иначе с доп. system-промптом; далее ошибка."""
     last_error: ValueError | None = None
+    budget = max_tokens
+    finish_reason: str | None = None
     for attempt in range(2):
         attempt_messages = list(messages)
-        if attempt == 1:
+        if attempt == 1 and finish_reason != "length":
             attempt_messages.append({"role": "system", "content": RETRY_SYSTEM_PROMPT})
-        content, _ = chat(
-            client, model, attempt_messages, temperature=temperature, max_tokens=max_tokens
+        content, usage = chat(
+            client, model, attempt_messages, temperature=temperature, max_tokens=budget
         )
+        finish_reason = usage.get("finish_reason")
         try:
             return json.loads(_strip_json_fences(content))
         except ValueError as exc:
             last_error = exc
             logger.warning("LLM returned invalid JSON (attempt %d): %s", attempt + 1, exc)
+            if finish_reason == "length":
+                budget *= 2
+                logger.warning(
+                    "LLM hit token limit (finish_reason=length), retrying with budget %d", budget
+                )
     raise InterviewError("LLM returned invalid JSON") from last_error

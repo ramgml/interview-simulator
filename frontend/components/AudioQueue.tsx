@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { applyOutputDevice } from "@/lib/audio";
 import { synthesizeSpeech } from "@/lib/api";
 
 /** Разбиение на предложения: [.!?…]\s, конечная фраза без пунктуации тоже играется. */
@@ -52,7 +53,9 @@ export default function AudioQueue({
             audioRef.current = audio;
             audio.onended = () => resolve();
             audio.onerror = () => resolve();
-            void audio.play().catch(() => resolve());
+            void applyOutputDevice(audio).finally(() => {
+              void audio.play().catch(() => resolve());
+            });
           });
         } catch {
           // Синтез одной фразы упал (бэкенд недоступен) — переходим к остальным,

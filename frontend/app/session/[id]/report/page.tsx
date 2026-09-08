@@ -65,7 +65,7 @@ export default function ReportPage() {
   }
 
   return (
-    <main className="mx-auto w-full max-w-3xl flex-1 px-4 py-8 flex flex-col gap-6">
+    <main className="mx-auto w-full max-w-3xl 2xl:max-w-screen-2xl flex-1 px-4 py-8 flex flex-col gap-6">
       <div className="flex items-center justify-between gap-4">
         <h1 className="text-2xl font-semibold tracking-tight">Отчёт по собеседованию</h1>
         <Button variant="outline" asChild>

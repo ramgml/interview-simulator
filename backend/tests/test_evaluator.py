@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 from app import evaluator
 from app.errors import InterviewError
+from app.config import settings as env
 from app.evaluator import EVAL_SYSTEM_PROMPT, degraded_report, evaluate
 
 REPORT = {
@@ -49,11 +50,15 @@ class FakeClient:
         self.chat = SimpleNamespace(
             completions=SimpleNamespace(create=self._create, calls=self.calls)
         )
-
     def _create(self, **kwargs):
         self.calls.append(kwargs)
         return SimpleNamespace(
-            choices=[SimpleNamespace(message=SimpleNamespace(content=self.responses.pop(0)))],
+            choices=[
+                SimpleNamespace(
+                    message=SimpleNamespace(content=self.responses.pop(0)),
+                    finish_reason="stop",
+                )
+            ],
             usage=None,
         )
 
@@ -257,3 +262,11 @@ def test_evaluate_transcript_reads_turns_from_db(tmp_path, monkeypatch):
         {"turn_idx": 1, "role": "interviewer", "text": "Вопрос?"},
         {"turn_idx": 2, "role": "candidate", "text": "Ответ."},
     ]
+
+
+def test_evaluate_max_tokens_from_settings(monkeypatch):
+    """EVAL берёт max_tokens из Settings (T157)."""
+    monkeypatch.setattr(env, "eval_max_tokens", 999)
+    client = FakeClient([REPORT_JSON])
+    evaluate(client, make_session(), model="test-model")
+    assert client.calls[0]["max_tokens"] == 999

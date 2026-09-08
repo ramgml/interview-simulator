@@ -1,11 +1,20 @@
 """Конфигурация приложения: pydantic-settings, читает .env в корне репозитория."""
 
 from pathlib import Path
+from typing import Annotated
 
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import BeforeValidator
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 # .env лежит в корне репозитория (каркас T128); backend запускается из backend/.
 _REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _split_csv_origins(value: object) -> object:
+    """CSV-строку CORS_ORIGINS — в список origins; пустые элементы отбрасываются."""
+    if isinstance(value, str):
+        return [origin.strip() for origin in value.split(",") if origin.strip()]
+    return value
 
 
 class Settings(BaseSettings):
@@ -24,6 +33,13 @@ class Settings(BaseSettings):
     cloud_llm_api_key: str = ""
     cloud_llm_model: str = ""
 
+    # LLM: бюджеты генерации PLAN/TURN/EVAL (max_tokens). На reasoning-моделях (напр.
+    # glm-5.3-flash на Zhipu) reasoning тоже расходует этот бюджет — поднимай, если JSON
+    # приходит пустым/обрезанным (finish_reason=length).
+    plan_max_tokens: int = 4000
+    turn_max_tokens: int = 1000
+    eval_max_tokens: int = 4000
+
     # Трейсинг
     mlflow_tracking_uri: str = "sqlite:///data/mlflow.db"
 
@@ -34,6 +50,17 @@ class Settings(BaseSettings):
 
     # БД
     database_url: str = "sqlite:///data/app.db"
+
+    # Ленивое автозакрытие осиротевших in_progress-сессий при GET /api/sessions (T158):
+    # последний ход старше N часов → сессия закрывается как отменённая; N <= 0 — выключено.
+    orphan_close_hours: int = 12
+
+    # CORS: разрешённые origins фронта, env CORS_ORIGINS — CSV
+    # (напр. "http://localhost:3000,http://localhost:5173"). NoDecode отключает
+    # JSON-декодирование сложных значений, CSV разбирает BeforeValidator.
+    cors_origins: Annotated[list[str], NoDecode, BeforeValidator(_split_csv_origins)] = [
+        "http://localhost:3000"
+    ]
 
 
 settings = Settings()

@@ -54,6 +54,7 @@ export interface SessionBrief {
   style: string;
   planned_questions: number;
   overall_score: number | null;
+  error: string | null;
 }
 
 export interface Turn {
@@ -113,6 +114,10 @@ export function sendAudioAnswer(id: string, audio: Blob): Promise<AnswerOut> {
 
 export function finishSession(id: string): Promise<SessionState> {
   return request(`/api/sessions/${id}/finish`, { method: "POST" });
+}
+
+export function cancelSession(id: string): Promise<SessionState> {
+  return request(`/api/sessions/${id}/cancel`, { method: "POST" });
 }
 
 export function listSessions(): Promise<SessionBrief[]> {
@@ -204,6 +209,10 @@ export function updateSettings(input: SettingsUpdateInput): Promise<SettingsRead
 
 export function testSettings(): Promise<{ ok: boolean }> {
   return request("/api/settings/test");
+}
+
+export function getModels(): Promise<{ models: string[] }> {
+  return request("/api/models");
 }
 
 export async function synthesizeSpeech(text: string, voice?: string): Promise<Blob> {

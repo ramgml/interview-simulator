@@ -42,8 +42,19 @@ class FakeClient:
 
 
 class FakeResponse:
-    def __init__(self, content: str):
-        self.choices = [type("C", (), {"message": type("M", (), {"content": content})()})]
+    """Стаб ответа create(): content + finish_reason (usage с токенами)."""
+
+    def __init__(self, content: str, finish_reason: str | None = "stop"):
+        self.choices = [
+            type(
+                "C",
+                (),
+                {
+                    "message": type("M", (), {"content": content})(),
+                    "finish_reason": finish_reason,
+                },
+            )()
+        ]
         self.usage = type(
             "U", (), {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}
         )()
@@ -130,7 +141,12 @@ def test_chat_returns_content_and_usage():
     messages = [{"role": "user", "content": "ping"}]
     content, usage = chat(client, "m", messages, temperature=0.2, max_tokens=100)
     assert content == '{"ok": true}'
-    assert usage == {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}
+    assert usage == {
+        "prompt_tokens": 10,
+        "completion_tokens": 5,
+        "total_tokens": 15,
+        "finish_reason": "stop",
+    }
     call = client.chat.completions.calls[0]
     assert call["model"] == "m"
     assert call["messages"] == messages
@@ -190,6 +206,47 @@ def test_json_chat_both_invalid_raises():
     with pytest.raises(InterviewError):
         json_chat(client, "m", [], temperature=0.2, max_tokens=10)
     assert len(client.chat.completions.calls) == 2  # ретрай ровно один
+
+
+def test_json_chat_length_retries_with_doubled_budget():
+    """Обрыв по length + мусор: ровно один ретрай с удвоенным бюджетом и без доп. system."""
+    client = FakeClient(FakeResponse('{"обрыв', finish_reason="length"))
+    responses = [
+        FakeResponse('{"обрыв', finish_reason="length"),
+        FakeResponse('{"recovered": true}', finish_reason="stop"),
+    ]
+
+    def create(**kwargs):
+        client.chat.completions.calls.append(kwargs)
+        return responses.pop(0)
+
+    client.chat.completions.create = create
+    result = json_chat(client, "m", [{"role": "user", "content": "q"}],
+                       temperature=0.2, max_tokens=10)
+    assert result == {"recovered": True}
+    calls = client.chat.completions.calls
+    assert len(calls) == 2
+    assert calls[0]["max_tokens"] == 10
+    assert calls[1]["max_tokens"] == 20  # budget*2 от первой попытки
+    assert calls[1]["messages"] == [{"role": "user", "content": "q"}]
+
+
+def test_json_chat_length_twice_raises():
+    """Обрыв по length дважды (второй бюджет 2×) → InterviewError, ретрай ровно один."""
+    client = FakeClient(FakeResponse('{"обрыв', finish_reason="length"))
+    with pytest.raises(InterviewError):
+        json_chat(client, "m", [], temperature=0.2, max_tokens=10)
+    calls = client.chat.completions.calls
+    assert len(calls) == 2
+    assert calls[0]["max_tokens"] == 10
+    assert calls[1]["max_tokens"] == 20
+
+
+def test_json_chat_valid_json_with_length_no_retry():
+    """Валидный JSON при finish_reason=length → возврат сразу, без ретрая."""
+    client = FakeClient(FakeResponse('{"ok": true}', finish_reason="length"))
+    assert json_chat(client, "m", [], temperature=0.2, max_tokens=10) == {"ok": True}
+    assert len(client.chat.completions.calls) == 1
 
 
 def test_strip_json_fences_variants():
